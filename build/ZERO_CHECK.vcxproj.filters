@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\obs-lyrics-v9.5\build\CMakeFiles\bb54c7604cc18395b2f15dbcd35c5459\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{4D486EAE-AB71-3CA1-A174-9E12223AF0DC}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

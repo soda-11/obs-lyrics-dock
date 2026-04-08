@@ -1,0 +1,4 @@
+C:/obs-lyrics-v9.5/build/CMakeFiles/obs-lyrics-dock.dir
+C:/obs-lyrics-v9.5/build/CMakeFiles/INSTALL.dir
+C:/obs-lyrics-v9.5/build/CMakeFiles/ALL_BUILD.dir
+C:/obs-lyrics-v9.5/build/CMakeFiles/ZERO_CHECK.dir

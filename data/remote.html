@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>OBS Lyrics Remote</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+:root{
+  --bg:#0d0d0d;--bg2:#1a1a1a;--bg3:#252525;
+  --accent:#4da6ff;--danger:#ff4444;--success:#44ff88;
+  --warn:#ffd966;--text:#e0e0e0;--text2:#888;--border:#333;
+  --score-font-size:15px;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif;
+  height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+
+/* ── Screens ── */
+#roleScreen,#viewerModeScreen{
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:center;height:100vh;gap:16px;padding:24px;}
+#roleScreen h1,#viewerModeScreen h1{font-size:20px;color:var(--accent);margin-bottom:4px;}
+#roleScreen p,#viewerModeScreen p{color:var(--text2);font-size:13px;text-align:center;margin-bottom:8px;}
+.roleBtn{width:100%;max-width:320px;padding:18px;border-radius:12px;
+  border:2px solid var(--border);background:var(--bg2);color:var(--text);
+  font-size:17px;font-weight:600;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:4px;}
+.roleBtn span{font-size:11px;font-weight:400;color:#888;}
+.roleBtn.manager{border-color:var(--accent);}
+.roleBtn.manager:active{background:#1a3a5c;}
+.roleBtn.viewer{border-color:#666;}
+.roleBtn.viewer:active{background:#2a2a2a;}
+.roleBtn.conf{border-color:#888;}
+.roleBtn.score{border-color:var(--warn);}
+.roleBtn.score:active{background:#3a2a00;}
+
+/* ── App shell ── */
+#app{display:none;flex-direction:column;height:100vh;}
+#statusBar{background:var(--bg2);border-bottom:1px solid var(--border);
+  padding:5px 10px;display:flex;align-items:center;gap:8px;font-size:11px;}
+#connDot{width:8px;height:8px;border-radius:50%;background:var(--danger);flex-shrink:0;}
+#connDot.ok{background:var(--success);}
+#statusText{color:var(--text2);flex:1;}
+#roleTag{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;
+  background:var(--accent);color:#000;}
+#roleTag.viewer{background:#555;color:#ccc;}
+#roleTag.score{background:var(--warn);color:#000;}
+
+/* ── Manager tabs ── */
+#tabBar{display:flex;background:var(--bg2);border-bottom:1px solid var(--border);}
+.tab{flex:1;padding:10px 4px;text-align:center;font-size:12px;
+  color:var(--text2);cursor:pointer;border-bottom:3px solid transparent;}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab:active{background:var(--bg3);}
+
+/* ── Content ── */
+#content{flex:1;overflow:hidden;position:relative;}
+.panel{position:absolute;inset:0;overflow-y:auto;display:none;
+  padding:8px;-webkit-overflow-scrolling:touch;}
+.panel.active{display:block;}
+
+/* ── Viewer confidence monitor ── */
+#confPanel{display:none;flex-direction:column;align-items:center;
+  justify-content:center;flex:1;padding:24px;text-align:center;}
+#confLyrics{font-size:clamp(26px,6vw,52px);font-weight:700;
+  color:#fff;line-height:1.35;white-space:pre-wrap;margin-bottom:20px;}
+#confTitle{font-size:15px;color:var(--text2);}
+#confSection{font-size:13px;color:var(--accent);margin-top:3px;}
+#confEmpty{font-size:18px;color:#333;margin-top:40px;}
+
+/* ── Viewer score mode ── */
+#scorePanel{display:none;flex-direction:column;flex:1;overflow:hidden;}
+#scoreSongBar{background:var(--bg2);border-bottom:1px solid var(--border);
+  padding:8px;display:flex;align-items:center;gap:6px;flex-shrink:0;}
+#scoreSongSelect{flex:1;background:var(--bg3);color:var(--text);
+  border:1px solid var(--border);border-radius:6px;padding:6px 8px;
+  font-size:13px;}
+#scoreBody{flex:1;overflow-y:auto;padding:12px;-webkit-overflow-scrolling:touch;}
+.scoreSection{margin-bottom:20px;}
+.scoreSectionLabel{font-size:11px;color:var(--accent);text-transform:uppercase;
+  letter-spacing:1px;margin-bottom:6px;padding-bottom:3px;
+  border-bottom:1px solid var(--border);}
+.scoreSlide{background:var(--bg2);border-radius:6px;padding:10px 12px;
+  margin-bottom:6px;border:1px solid var(--border);transition:border-color 0.2s;}
+.scoreSlide.active{border:2px solid var(--accent);background:#0a1f35;}
+.scoreSlideText{font-size:var(--score-font-size,15px);line-height:1.5;white-space:pre-wrap;color:#eee;}
+
+/* ── Song list (manager) ── */
+.songItem{background:var(--bg2);border-radius:8px;margin-bottom:6px;
+  overflow:hidden;border:1px solid var(--border);}
+.songHeader{padding:11px 13px;cursor:pointer;display:flex;align-items:center;gap:10px;}
+.songHeader:active{background:var(--bg3);}
+.songTitle{font-size:14px;font-weight:600;}
+.songArtist{font-size:11px;color:var(--text2);margin-top:2px;}
+.songNum{font-size:11px;color:var(--accent);min-width:20px;}
+.chevron{margin-left:auto;color:var(--text2);font-size:11px;transition:transform 0.2s;}
+.chevron.open{transform:rotate(90deg);}
+.slideList{display:none;border-top:1px solid var(--border);}
+.slideList.open{display:block;}
+.slideItem{padding:9px 13px 9px 24px;cursor:pointer;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:8px;}
+.slideItem:last-child{border-bottom:none;}
+.slideItem:active{background:var(--bg3);}
+.slideItem.active{background:#1a3a5c;color:var(--accent);}
+.slideLabel{font-size:10px;color:var(--text2);min-width:58px;margin-top:2px;flex-shrink:0;}
+.slideText{color:var(--text);font-size:12px;flex:1;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;line-height:1.4;}
+
+/* ── Scenes ── */
+.sceneItem{background:var(--bg2);border-radius:8px;margin-bottom:6px;
+  padding:13px;cursor:pointer;border:2px solid var(--border);
+  font-size:14px;font-weight:600;}
+.sceneItem:active{background:var(--bg3);}
+.sceneItem.active{border-color:var(--accent);color:var(--accent);background:#0a1f35;}
+
+/* ── Media ── */
+.mediaItem{background:var(--bg2);border-radius:8px;margin-bottom:6px;
+  padding:11px 13px;cursor:pointer;border:2px solid var(--border);
+  font-size:12px;display:flex;align-items:center;gap:10px;}
+.mediaItem:active{background:var(--bg3);}
+.mediaItem.active{border-color:var(--accent);color:var(--accent);}
+.mediaIcon{font-size:18px;flex-shrink:0;}
+.mediaName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+/* ── Controls ── */
+.ctrlSection{margin-bottom:14px;}
+.ctrlTitle{font-size:10px;color:var(--text2);text-transform:uppercase;
+  letter-spacing:1px;margin-bottom:7px;padding:0 2px;}
+.ctrlBtn{width:100%;padding:13px;border-radius:8px;border:none;
+  font-size:14px;font-weight:600;cursor:pointer;margin-bottom:7px;}
+.ctrlBtn:active{opacity:0.8;}
+.ctrlBtn.danger{background:#5c1a1a;color:#ff6b6b;border:1px solid #8b2020;}
+.ctrlBtn.warn{background:#5c4a1a;color:var(--warn);border:1px solid #8b6820;}
+.ctrlBtn.primary{background:#1a3a5c;color:var(--accent);border:1px solid #2a5a8c;}
+.ctrlBtn.ok{background:#1a4a2a;color:var(--success);border:1px solid #2a7a3a;}
+
+/* ── Misc ── */
+.emptyState{text-align:center;color:var(--text2);padding:36px 20px;font-size:13px;}
+#reconnBanner{display:none;position:fixed;top:0;left:0;right:0;
+  background:#5c1a00;color:#ff8844;text-align:center;
+  padding:7px;font-size:12px;z-index:999;}
+</style>
+</head>
+<body>
+<div id="reconnBanner">Connection lost — reconnecting...</div>
+
+<!-- ── Role selection ── -->
+<div id="roleScreen">
+  <h1>🎵 OBS Lyrics Remote</h1>
+  <p>Choose your role</p>
+  <button class="roleBtn manager" onclick="chooseRole('manager')">
+    🎛️ Manager
+    <span>Full control — slides, scenes, media</span>
+  </button>
+  <button class="roleBtn viewer" onclick="showViewerModeScreen()">
+    👁️ Viewer
+    <span>Read-only display</span>
+  </button>
+</div>
+
+<!-- ── Viewer mode selection ── -->
+<div id="viewerModeScreen" style="display:none">
+  <h1>👁️ Viewer Mode</h1>
+  <p>How do you want to see the lyrics?</p>
+  <button class="roleBtn conf" onclick="chooseViewerMode('confidence')">
+    📺 Confidence Monitor
+    <span>Shows the current slide — live, auto-updates</span>
+  </button>
+  <button class="roleBtn score" onclick="chooseViewerMode('score')">
+    🎼 Score View
+    <span>Browse full song lyrics — read ahead</span>
+  </button>
+  <button class="roleBtn" style="border-color:#444;font-size:13px;padding:10px"
+    onclick="showRoleScreen()">← Back</button>
+</div>
+
+<!-- ── Main app ── -->
+<div id="app">
+  <div id="statusBar">
+    <div id="connDot"></div>
+    <span id="statusText">Connecting...</span>
+    <span id="roleTag">Manager</span>
+    <span style="color:#444;font-size:10px;margin-left:4px">v9.5.1</span>
+  </div>
+
+  <!-- Manager tabs -->
+  <div id="tabBar">
+    <div class="tab active" onclick="showTab('songs')">Songs</div>
+    <div class="tab" onclick="showTab('scenes')">Scenes</div>
+    <div class="tab" onclick="showTab('media')">Media</div>
+    <div class="tab" onclick="showTab('controls')">Controls</div>
+  </div>
+
+  <div id="content">
+    <div class="panel active" id="panel-songs">
+      <div id="songList"><div class="emptyState">Loading sequence...</div></div>
+    </div>
+    <div class="panel" id="panel-scenes">
+      <div id="sceneList"><div class="emptyState">Loading scenes...</div></div>
+    </div>
+    <div class="panel" id="panel-media">
+      <div style="padding:0 2px 8px">
+        <button class="ctrlBtn danger" onclick="send({type:'clearMedia'})">
+          ⬛ Clear Media</button>
+      </div>
+      <div id="mediaList"><div class="emptyState">No media items</div></div>
+    </div>
+    <div class="panel" id="panel-controls">
+      <div class="ctrlSection">
+        <div class="ctrlTitle">Lyrics</div>
+        <button class="ctrlBtn danger" onclick="send({type:'clearLyrics'})">⬛ Blackout Lyrics</button>
+        <button class="ctrlBtn warn"   onclick="send({type:'clearMedia'})">⬛ Clear Media</button>
+      </div>
+      <div class="ctrlSection">
+        <div class="ctrlTitle">Streaming</div>
+        <button class="ctrlBtn primary" id="streamBtn" onclick="toggleStream()">▶ Start Stream</button>
+      </div>
+      <div class="ctrlSection">
+        <div class="ctrlTitle">Recording</div>
+        <button class="ctrlBtn ok" id="recordBtn" onclick="toggleRecord()">⏺ Start Recording</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confidence monitor (viewer) -->
+  <div id="confPanel">
+    <div id="confLyrics"></div>
+    <div id="confMeta">
+      <div id="confTitle"></div>
+      <div id="confSection"></div>
+    </div>
+    <div id="confEmpty">Waiting for lyrics...</div>
+  </div>
+
+  <!-- Score view (viewer) -->
+  <div id="scorePanel">
+    <div id="scoreSongBar">
+      <select id="scoreSongSelect" onchange="onScoreSongChanged()">
+        <option value="">— Select a song —</option>
+      </select>
+      <button id="followBtn" onclick="toggleFollow()"
+        style="background:var(--bg3);color:var(--text2);
+        border:1px solid var(--border);border-radius:5px;
+        padding:5px 9px;font-size:12px;cursor:pointer;
+        flex-shrink:0;white-space:nowrap;"
+        title="Follow active slide from OBS">Follow</button>
+      <button onclick="changeFontSize(-2)"
+        style="background:var(--bg3);color:var(--text);
+        border:1px solid var(--border);border-radius:5px;
+        padding:5px 9px;font-size:13px;cursor:pointer;flex-shrink:0;"
+        title="Decrease font size">A−</button>
+      <button onclick="changeFontSize(2)"
+        style="background:var(--bg3);color:var(--text);
+        border:1px solid var(--border);border-radius:5px;
+        padding:5px 9px;font-size:15px;font-weight:bold;cursor:pointer;flex-shrink:0;"
+        title="Increase font size">A+</button>
+    </div>
+    <div id="scoreBody">
+      <div class="emptyState">Select a song above to see its lyrics</div>
+    </div>
+  </div>
+</div>
+
+<script>
+var ws=null, myRole=null, viewerMode=null;
+var currentScene=null, currentSlide=-1, currentMedia=null;
+var isStreaming=false, isRecording=false;
+var songData=[], sceneList=[], mediaData=[], reconnTimer=null;
+var scoreFontSize=15; // default score text font size in px
+var scoreFollowMode=false;  // when true, score view tracks active slide
+var scoreActiveSongIdx=-1;  // which song index is currently active in score
+
+// ── Connection ────────────────────────────────────────────────
+function connect(){
+  var host=location.hostname||'127.0.0.1', port=location.port||'8765';
+  ws=new WebSocket('ws://'+host+':'+port);
+  ws.onopen=function(){
+    clearTimeout(reconnTimer);
+    document.getElementById('reconnBanner').style.display='none';
+    document.getElementById('connDot').classList.add('ok');
+    document.getElementById('statusText').textContent='Connected';
+    if(myRole) send({type:'setRole',role:myRole});
+  };
+  ws.onmessage=function(e){ try{handleMsg(JSON.parse(e.data));}catch(x){console.error(x);} };
+  ws.onclose=ws.onerror=function(){
+    document.getElementById('connDot').classList.remove('ok');
+    document.getElementById('statusText').textContent='Disconnected';
+    document.getElementById('reconnBanner').style.display='block';
+    reconnTimer=setTimeout(connect,3000);
+  };
+}
+function send(obj){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(obj)); }
+
+// ── Role screens ──────────────────────────────────────────────
+function showRoleScreen(){
+  document.getElementById('roleScreen').style.display='flex';
+  document.getElementById('viewerModeScreen').style.display='none';
+}
+function showViewerModeScreen(){
+  document.getElementById('roleScreen').style.display='none';
+  document.getElementById('viewerModeScreen').style.display='flex';
+}
+
+function chooseRole(role){
+  myRole=role; viewerMode=null;
+  send({type:'setRole',role:role});
+  document.getElementById('roleScreen').style.display='none';
+  document.getElementById('viewerModeScreen').style.display='none';
+  document.getElementById('app').style.display='flex';
+  var tag=document.getElementById('roleTag');
+  tag.textContent='Manager'; tag.className='';
+  document.getElementById('tabBar').style.display='flex';
+  document.getElementById('content').style.display='block';
+  document.getElementById('confPanel').style.display='none';
+  document.getElementById('scorePanel').style.display='none';
+  send({type:'getScenes'});
+}
+
+function chooseViewerMode(mode){
+  myRole='viewer'; viewerMode=mode;
+  send({type:'setRole',role:'viewer'});
+  document.getElementById('roleScreen').style.display='none';
+  document.getElementById('viewerModeScreen').style.display='none';
+  document.getElementById('app').style.display='flex';
+  var tag=document.getElementById('roleTag');
+  tag.className='viewer';
+  document.getElementById('tabBar').style.display='none';
+  document.getElementById('content').style.display='none';
+
+  if(mode==='confidence'){
+    tag.textContent='Viewer';
+    document.getElementById('confPanel').style.display='flex';
+    document.getElementById('scorePanel').style.display='none';
+    updateConf(currentSlide);
+  } else {
+    tag.textContent='Score';
+    tag.className='score';
+    document.getElementById('confPanel').style.display='none';
+    document.getElementById('scorePanel').style.display='flex';
+    renderScoreSongList();
+  }
+}
+
+// ── Message handler ───────────────────────────────────────────
+function handleMsg(msg){
+  switch(msg.type){
+    case 'state':
+      updateSlideActive(msg.slideIndex);
+      if(msg.lyrics!==undefined) updateConf(msg.slideIndex, msg.lyrics, msg.section, msg.title);
+      if(scoreFollowMode && msg.slideIndex>=0) applyScoreFollow(msg.slideIndex, msg.title);
+      currentScene=msg.scene; currentMedia=msg.mediaPath;
+      isStreaming=msg.streaming||false; isRecording=msg.recording||false;
+      renderScenes(); renderMedia(); updateStreamBtns();
+      break;
+    case 'slideUpdate':
+      updateSlideActive(msg.slideIndex);
+      updateConf(msg.slideIndex, msg.lyrics, msg.section, msg.title);
+      if(scoreFollowMode) applyScoreFollow(msg.slideIndex, msg.title);
+      break;
+    case 'sceneUpdate':
+      currentScene=msg.scene; renderScenes(); break;
+    case 'mediaUpdate':
+      currentMedia=msg.path; renderMedia(); break;
+    case 'songs':
+      songData=msg.songs||[];
+      renderSongs();
+      renderScoreSongList();
+      // If in follow mode and we now have song data, apply follow
+      if(scoreFollowMode && currentSlide>=0)
+        applyScoreFollow(currentSlide, null);
+      break;
+    case 'scenes':
+      sceneList=msg.scenes||[]; currentScene=msg.currentScene; renderScenes(); break;
+    case 'mediaList':
+      mediaData=msg.items||[]; renderMedia(); break;
+  }
+}
+
+// ── Slide active highlight ────────────────────────────────────
+function updateSlideActive(idx){
+  currentSlide=idx;
+  document.querySelectorAll('.slideItem').forEach(function(el){
+    el.classList.toggle('active', parseInt(el.dataset.idx)===idx && idx>=0);
+  });
+}
+
+// ── Confidence monitor update ─────────────────────────────────
+function updateConf(idx, lyrics, section, title){
+  var ly=lyrics||'', sec=section||'', ttl=title||'';
+  var empty=!ly && !sec && !ttl;
+  document.getElementById('confLyrics').textContent=ly;
+  document.getElementById('confTitle').textContent=ttl;
+  document.getElementById('confSection').textContent=sec;
+  document.getElementById('confEmpty').style.display=empty?'block':'none';
+  document.getElementById('confLyrics').style.display=empty?'none':'block';
+}
+
+// ── Manager: render song sequence ─────────────────────────────
+function renderSongs(){
+  var el=document.getElementById('songList');
+  if(!songData.length){
+    el.innerHTML='<div class="emptyState">Waiting for sequence...<br>'
+      +'<small>Songs will appear once OBS sequence is loaded</small></div>';
+    return;
+  }
+  el.innerHTML=songData.map(function(song,si){
+    var slides=song.slides||[];
+    return '<div class="songItem">'
+      +'<div class="songHeader" onclick="toggleSong('+si+')">'
+      +'<span class="songNum">'+(si+1)+'</span>'
+      +'<div><div class="songTitle">'+esc(song.title)+'</div>'
+      +(song.artist?'<div class="songArtist">'+esc(song.artist)+'</div>':'')
+      +'</div>'
+      +'<span style="font-size:10px;color:var(--text2);margin-left:auto;margin-right:6px">'
+      +slides.length+' slides</span>'
+      +'<span class="chevron" id="chev-'+si+'">&#9654;</span>'
+      +'</div>'
+      +'<div class="slideList" id="slds-'+si+'">'
+      +slides.map(function(sl){
+        return '<div class="slideItem" data-idx="'+sl.slideIndex+'"'
+          +' onclick="pushSlide(\''+escJs(sl.text)+'\',\''+escJs(sl.label)+'\',\''+escJs(song.title)+'\','+sl.slideIndex+')">'
+          +'<span class="slideLabel">'+esc(sl.label)+'</span>'
+          +'<span class="slideText">'+esc(sl.text.replace(/\n/g,' / '))+'</span>'
+          +'</div>';
+      }).join('')
+      +'</div></div>';
+  }).join('');
+  // Re-highlight active slide
+  updateSlideActive(currentSlide);
+}
+
+function toggleSong(si){
+  var sl=document.getElementById('slds-'+si);
+  var ch=document.getElementById('chev-'+si);
+  var open=sl.classList.toggle('open');
+  ch.classList.toggle('open',open);
+}
+
+function pushSlide(lyrics,section,title,idx){
+  send({type:'pushSlide',lyrics:lyrics,section:section,title:title,slideIndex:idx});
+}
+
+// ── Viewer: score song list ───────────────────────────────────
+function renderScoreSongList(){
+  if(viewerMode!=='score') return;
+  var sel=document.getElementById('scoreSongSelect');
+  var prev=sel.value;
+  if(!songData.length){
+    sel.innerHTML='<option value="">Waiting for sequence...</option>';
+  } else {
+    sel.innerHTML='<option value="">— Select a song —</option>'
+      +songData.map(function(s,i){
+        return '<option value="'+i+'">'+esc((i+1)+'. '+s.title)+'</option>';
+      }).join('');
+    if(prev) sel.value=prev;
+  }
+  renderScore();
+}
+
+function onScoreSongChanged(){
+  // User manually selected a song — disable follow mode
+  scoreFollowMode=false;
+  updateFollowBtn();
+  renderScore();
+}
+
+function toggleFollow(){
+  scoreFollowMode=!scoreFollowMode;
+  updateFollowBtn();
+  if(scoreFollowMode && currentSlide>=0){
+    // Find which song contains currentSlide and jump there
+    applyScoreFollow(currentSlide, null);
+  }
+}
+
+function updateFollowBtn(){
+  var btn=document.getElementById('followBtn');
+  if(!btn) return;
+  if(scoreFollowMode){
+    btn.style.background='var(--accent)';
+    btn.style.color='#000';
+    btn.style.borderColor='var(--accent)';
+    btn.textContent='Following';
+  } else {
+    btn.style.background='var(--bg3)';
+    btn.style.color='var(--text2)';
+    btn.style.borderColor='var(--border)';
+    btn.textContent='Follow';
+  }
+}
+
+// Called when a slideUpdate arrives and follow mode is on.
+// Finds the song that contains the active slide and switches score view to it.
+function applyScoreFollow(slideIdx, title){
+  if(!songData.length) return;
+  // Find song by title match or by searching slideIndex ranges
+  var foundSongIdx=-1;
+  for(var si=0;si<songData.length;si++){
+    var slides=songData[si].slides||[];
+    for(var i=0;i<slides.length;i++){
+      if(slides[i].slideIndex===slideIdx){
+        foundSongIdx=si; break;
+      }
+    }
+    if(foundSongIdx>=0) break;
+  }
+  // If not found by slideIndex, try by title
+  if(foundSongIdx<0 && title){
+    for(var si=0;si<songData.length;si++){
+      if(songData[si].title===title){ foundSongIdx=si; break; }
+    }
+  }
+  if(foundSongIdx<0) return;
+  // Switch song selector if needed
+  var sel=document.getElementById('scoreSongSelect');
+  if(sel && parseInt(sel.value)!==foundSongIdx){
+    sel.value=String(foundSongIdx);
+    scoreActiveSongIdx=foundSongIdx;
+    renderScore();
+  }
+  // Highlight the active slide
+  highlightScoreSlide(slideIdx);
+}
+
+function highlightScoreSlide(slideIdx){
+  document.querySelectorAll('.scoreSlide').forEach(function(el){
+    el.classList.toggle('active', parseInt(el.dataset.slideIdx)===slideIdx);
+  });
+  // Scroll active slide into view
+  var active=document.querySelector('.scoreSlide.active');
+  if(active) active.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function renderScore(){
+  var sel=document.getElementById('scoreSongSelect');
+  var body=document.getElementById('scoreBody');
+  var idx=parseInt(sel.value);
+  if(isNaN(idx)||!songData[idx]){
+    body.innerHTML='<div class="emptyState">'+
+      (songData.length ? 'Select a song above' : 'Waiting for sequence data...<br><small>Songs will appear once OBS sequence is loaded</small>')+
+      '</div>';
+    return;
+  }
+  var song=songData[idx];
+  var slides=song.slides||[];
+  if(!slides.length){
+    body.innerHTML='<div class="emptyState">This song has no slides</div>';
+    return;
+  }
+  // Group slides by label (section grouping)
+  var sections=[], curLabel=null, curSlides=[];
+  slides.forEach(function(sl){
+    if(sl.label!==curLabel){
+      if(curSlides.length) sections.push({label:curLabel,slides:curSlides});
+      curLabel=sl.label; curSlides=[sl];
+    } else {
+      curSlides.push(sl);
+    }
+  });
+  if(curSlides.length) sections.push({label:curLabel,slides:curSlides});
+
+  // Re-apply active highlight after re-render if in follow mode
+  if(scoreFollowMode && currentSlide>=0){
+    setTimeout(function(){ highlightScoreSlide(currentSlide); },0);
+  }
+  body.innerHTML='<h2 style="font-size:16px;margin-bottom:4px;color:#fff">'
+    +esc(song.title)+'</h2>'
+    +(song.artist?'<div style="font-size:12px;color:var(--text2);margin-bottom:16px">'+esc(song.artist)+'</div>':'')
+    +sections.map(function(sec){
+      return '<div class="scoreSection">'
+        +'<div class="scoreSectionLabel">'+esc(sec.label)+'</div>'
+        +sec.slides.map(function(sl){
+          return '<div class="scoreSlide" data-slide-idx="'+sl.slideIndex+'">'
+            +'<div class="scoreSlideText">'+esc(sl.text)+'</div>'
+            +'</div>';
+        }).join('')
+        +'</div>';
+    }).join('');
+}
+
+// ── Scenes ────────────────────────────────────────────────────
+function renderScenes(){
+  var el=document.getElementById('sceneList');
+  if(!sceneList.length){ el.innerHTML='<div class="emptyState">No scenes</div>'; return; }
+  el.innerHTML=sceneList.map(function(s){
+    return '<div class="sceneItem '+(s===currentScene?'active':'')+'"'
+      +' onclick="switchScene(\''+escJs(s)+'\')">'
+      +(s===currentScene?'&#9654; ':'')+esc(s)+'</div>';
+  }).join('');
+}
+function switchScene(n){ send({type:'switchScene',scene:n}); currentScene=n; renderScenes(); }
+
+// ── Media ─────────────────────────────────────────────────────
+function renderMedia(){
+  var el=document.getElementById('mediaList');
+  if(!mediaData.length){
+    el.innerHTML='<div class="emptyState">No media in gallery</div>'; return;
+  }
+  el.innerHTML=mediaData.map(function(item){
+    var isVid=/\.(mp4|mov|avi|mkv|webm|flv|wmv|m4v)$/i.test(item);
+    var name=item.split(/[\\/]/).pop();
+    var active=item===currentMedia;
+    return '<div class="mediaItem '+(active?'active':'')+'"'
+      +' onclick="pushMedia(\''+escJs(item)+'\')">'
+      +'<span class="mediaIcon">'+(isVid?'🎬':'🖼️')+'</span>'
+      +'<span class="mediaName">'+esc(name)+'</span>'
+      +(active?'<span style="margin-left:auto;color:var(--accent)">&#9654;</span>':'')
+      +'</div>';
+  }).join('');
+}
+function pushMedia(p){ send({type:'pushMedia',path:p,fadeMs:500}); }
+
+// ── Stream / record ───────────────────────────────────────────
+function toggleStream(){
+  send({type:isStreaming?'stopStream':'startStream'});
+  isStreaming=!isStreaming; updateStreamBtns();
+}
+function toggleRecord(){
+  send({type:isRecording?'stopRecord':'startRecord'});
+  isRecording=!isRecording; updateStreamBtns();
+}
+function updateStreamBtns(){
+  var sb=document.getElementById('streamBtn');
+  var rb=document.getElementById('recordBtn');
+  if(sb){ sb.textContent=isStreaming?'&#9209; Stop Stream':'&#9654; Start Stream';
+    sb.className='ctrlBtn '+(isStreaming?'danger':'primary'); }
+  if(rb){ rb.textContent=isRecording?'&#9209; Stop Recording':'&#9210; Start Recording';
+    rb.className='ctrlBtn '+(isRecording?'danger':'ok'); }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────
+function showTab(name){
+  var tabs=['songs','scenes','media','controls'];
+  document.querySelectorAll('.tab').forEach(function(t,i){
+    t.classList.toggle('active',tabs[i]===name);
+  });
+  document.querySelectorAll('.panel').forEach(function(p){
+    p.classList.toggle('active',p.id==='panel-'+name);
+  });
+  if(name==='scenes') send({type:'getScenes'});
+}
+
+// ── Utils ─────────────────────────────────────────────────────
+function esc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escJs(s){
+  return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")
+    .replace(/\n/g,'\\n').replace(/\r/g,'');
+}
+
+function changeFontSize(delta){
+  scoreFontSize=Math.max(10,Math.min(40,scoreFontSize+delta));
+  document.querySelectorAll('.scoreSlideText').forEach(function(el){
+    el.style.fontSize=scoreFontSize+'px';
+  });
+  // Also persist in CSS for next renderScore() call
+  document.documentElement.style.setProperty(
+    '--score-font-size', scoreFontSize+'px');
+}
+
+connect();
+</script>
+</body>
+</html>

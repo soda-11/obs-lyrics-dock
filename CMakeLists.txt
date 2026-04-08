@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.16)
+project(obs-lyrics-dock VERSION 9.5.1)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(libobs REQUIRED)
+find_package(obs-frontend-api REQUIRED)
+find_package(Qt6 COMPONENTS Core Widgets Network QUIET)
+if(Qt6_FOUND)
+    set(QT_VERSION 6)
+    message(STATUS "Using Qt6")
+else()
+    find_package(Qt5 COMPONENTS Core Widgets Network REQUIRED)
+    set(QT_VERSION 5)
+    message(STATUS "Using Qt5")
+endif()
+
+set(PLUGIN_SOURCES
+    src/plugin-main.cpp
+    src/lyrics-dock.cpp        src/lyrics-dock.hpp
+    src/song-manager.cpp       src/song-manager.hpp
+    src/song-edit-dialog.cpp   src/song-edit-dialog.hpp
+    src/lyrics-renderer.cpp    src/lyrics-renderer.hpp
+    src/media-gallery.cpp      src/media-gallery.hpp
+    src/websocket-server.cpp   src/websocket-server.hpp
+    src/settings-dialog.cpp    src/settings-dialog.hpp
+)
+
+add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})
+set_target_properties(obs-lyrics-dock PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
+
+if(QT_VERSION EQUAL 6)
+    target_link_libraries(obs-lyrics-dock PRIVATE
+        OBS::libobs OBS::obs-frontend-api
+        Qt6::Core Qt6::Widgets Qt6::Network)
+else()
+    target_link_libraries(obs-lyrics-dock PRIVATE
+        libobs obs-frontend-api
+        Qt5::Core Qt5::Widgets Qt5::Network)
+endif()
+
+target_include_directories(obs-lyrics-dock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+if(WIN32)
+    install(TARGETS obs-lyrics-dock
+        RUNTIME DESTINATION "obs-plugins/64bit"
+        LIBRARY DESTINATION "obs-plugins/64bit")
+    install(DIRECTORY data/
+        DESTINATION "data/obs-plugins/obs-lyrics-dock")
+endif()
+
+message(STATUS "obs-lyrics-dock v9.5.1 configured")
