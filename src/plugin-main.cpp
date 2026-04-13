@@ -1,4 +1,4 @@
-// plugin-main.cpp  v9.5.1
+// plugin-main.cpp  v9.8.1
 #include "lyrics-dock.hpp"
 #include "song-manager.hpp"
 #include "lyrics-renderer.hpp"
@@ -9,16 +9,21 @@
 #include <QMainWindow>
 #include <QStandardPaths>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 
 OBS_DECLARE_MODULE()
+// We implement obs_module_set_locale manually below so we can use the
+// absolute data path — OBS may return a relative path from
+// obs_get_module_data_path() which fails on systems where the process
+// working directory differs from the OBS bin folder.
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-lyrics-dock", "en-US")
 
 MODULE_EXPORT const char *obs_module_description()
 {
-    return "Lyrics Dock v9.5.1";
+    return "Lyrics Dock v9.8.1";
 }
 
 static LyricsDock      *s_dock     = nullptr;
@@ -40,6 +45,8 @@ static void autoStartWsServer()
     auto obj = doc.object();
     bool enabled = obj["wsEnabled"].toBool(false);
     int  port    = obj["wsPort"].toInt(8765);
+    QString pin = obj["wsPin"].toString();
+    if (s_wsServ) s_wsServ->setPin(pin);
     if (enabled && s_wsServ)
         s_wsServ->start((quint16)port);
 }
@@ -60,13 +67,46 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
 
 MODULE_EXPORT bool obs_module_load()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Loading v9.5.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Loading v9.8.1");
 
-    // Capture module data path while obs_current_module() is valid
-    s_dataPath = QString::fromUtf8(
-        obs_get_module_data_path(obs_current_module()));
+    // Capture module data path while obs_current_module() is valid.
+    // obs_get_module_data_path() can return a relative path (e.g.
+    // "../../data/obs-plugins/obs-lyrics-dock") on some OBS builds.
+    // Convert to absolute using the DLL's own location so remote.html
+    // serving works regardless of the process working directory.
+    {
+        const char *binPath =
+            obs_get_module_binary_path(obs_current_module());
+        if (binPath && *binPath) {
+            // DLL is at <obs-root>/obs-plugins/64bit/obs-lyrics-dock.dll
+            // Data is at <obs-root>/data/obs-plugins/obs-lyrics-dock/
+            QDir binDir = QFileInfo(QString::fromUtf8(binPath)).absoluteDir();
+            s_dataPath  = QDir::cleanPath(
+                binDir.absolutePath() +
+                "/../../data/obs-plugins/obs-lyrics-dock");
+        } else {
+            // Fallback: resolve obs_get_module_data_path against CWD
+            QString raw = QString::fromUtf8(
+                obs_get_module_data_path(obs_current_module()));
+            s_dataPath = QDir::isRelativePath(raw)
+                         ? QDir::cleanPath(QDir::currentPath() + "/" + raw)
+                         : raw;
+        }
+    }
     blog(LOG_INFO, "[obs-lyrics-dock] Data path: %s",
          s_dataPath.toUtf8().constData());
+
+    // Verify locale file is reachable and warn explicitly if not.
+    {
+        QString localePath = s_dataPath + "/locale/en-US.ini";
+        if (QFile::exists(localePath))
+            blog(LOG_INFO,  "[obs-lyrics-dock] Locale file OK: %s",
+                 localePath.toUtf8().constData());
+        else
+            blog(LOG_WARNING, "[obs-lyrics-dock] Locale file NOT found: %s"
+                 " — install the plugin via the installer, not by copying "
+                 "the DLL alone.", localePath.toUtf8().constData());
+    }
 
     lyrics_renderer_register();
     blog(LOG_INFO, "[obs-lyrics-dock] 'Lyrics' source registered");
@@ -102,13 +142,13 @@ MODULE_EXPORT bool obs_module_load()
 
     obs_frontend_add_dock_by_id("obs-lyrics-dock", "Lyrics", s_dock);
 
-    blog(LOG_INFO, "[obs-lyrics-dock] Registered v9.5.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Registered v9.8.1");
     return true;
 }
 
 MODULE_EXPORT void obs_module_unload()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Unloading v9.5.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Unloading v9.8.1");
 
     // s_dock is already nullptr — cleared in EXIT callback before Qt
     // destroyed the widget. Do NOT touch it here.

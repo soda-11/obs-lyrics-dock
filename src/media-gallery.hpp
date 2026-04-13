@@ -59,12 +59,30 @@ public:
 class MediaGallery : public QWidget {
     Q_OBJECT
 public:
-    explicit MediaGallery(QWidget *parent=nullptr);
+    // stateFileName: JSON file name (not full path) used by saveState/loadState.
+    // Default "media-gallery.json" is used by the Lyrics tab.
+    // Pass a different name (e.g. "scripture-gallery.json") for other tabs.
+    explicit MediaGallery(QWidget *parent=nullptr,
+                          const QString &stateFileName="media-gallery.json");
     void saveState();
     void loadState();
+    // Returns the current list of media file paths in this gallery.
+    QStringList itemPaths() const;
+
+signals:
+    // Emitted when a card is clicked to play — LyricsDock stops MV tab.
+    void mediaActivated();
+    // Emitted when Stop is pressed — LyricsDock also stops MV tab UI.
+    void stopAllRequested();
+    // Emitted whenever the item list changes (add/remove/reorder).
+    void mediaListChanged();
 
 public slots:
     void reorderCards(int fromIndex, int toIndex);
+    // Full stop: clears OBS source and deselects card.
+    void stopPlayback();
+    // UI-only deselect (no renderer call). Used when MV starts.
+    void clearActiveCard();
 
 private slots:
     void onAddMedia();
@@ -72,7 +90,6 @@ private slots:
     void onCardClicked(int index);
     void onCardRemoveRequested(int index);
     void onPlayPause();
-    void onScrubberMoved(int value);
     void onPollTimer();
 
 protected:
@@ -101,8 +118,9 @@ private:
     QTimer      *m_pollTimer;
 
     QList<MediaItem> m_items;
-    int  m_activeIndex = -1;
-    int  m_currentCols = 3;
-    bool m_paused      = false;
-    bool m_scrubbing   = false;
+    int     m_activeIndex  = -1;
+    int     m_currentCols  = 3;
+    bool    m_paused       = false;
+    int     m_seekCooldown = 0;
+    QString m_stateFileName;
 };

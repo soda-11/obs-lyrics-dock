@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs-lyrics-dock VERSION 9.5.1)
+project(obs-lyrics-dock VERSION 9.8.1)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -17,13 +17,16 @@ endif()
 
 set(PLUGIN_SOURCES
     src/plugin-main.cpp
-    src/lyrics-dock.cpp        src/lyrics-dock.hpp
-    src/song-manager.cpp       src/song-manager.hpp
-    src/song-edit-dialog.cpp   src/song-edit-dialog.hpp
-    src/lyrics-renderer.cpp    src/lyrics-renderer.hpp
-    src/media-gallery.cpp      src/media-gallery.hpp
-    src/websocket-server.cpp   src/websocket-server.hpp
-    src/settings-dialog.cpp    src/settings-dialog.hpp
+    src/lyrics-dock.cpp          src/lyrics-dock.hpp
+    src/song-manager.cpp         src/song-manager.hpp
+    src/song-edit-dialog.cpp     src/song-edit-dialog.hpp
+    src/lyrics-renderer.cpp      src/lyrics-renderer.hpp
+    src/media-gallery.cpp        src/media-gallery.hpp
+    src/mv-tab.cpp               src/mv-tab.hpp
+    src/scripture-tab.cpp        src/scripture-tab.hpp
+    src/color-preset-button.cpp  src/color-preset-button.hpp
+    src/websocket-server.cpp     src/websocket-server.hpp
+    src/settings-dialog.cpp      src/settings-dialog.hpp
 )
 
 add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})
@@ -50,4 +53,4 @@ if(WIN32)
         DESTINATION "data/obs-plugins/obs-lyrics-dock")
 endif()
 
-message(STATUS "obs-lyrics-dock v9.5.1 configured")
+message(STATUS "obs-lyrics-dock v9.8.1 configured")

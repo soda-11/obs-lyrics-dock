@@ -1,7 +1,9 @@
-// lyrics-dock.cpp  v9.5.1
+// lyrics-dock.cpp  v9.8.0
 #include "lyrics-dock.hpp"
 #include "song-edit-dialog.hpp"
 #include "media-gallery.hpp"
+#include "scripture-tab.hpp"
+#include "color-preset-button.hpp"
 
 #include "lyrics-renderer.hpp"
 #include "settings-dialog.hpp"
@@ -24,6 +26,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QColorDialog>
+#include <QSpinBox>
+
+// ── Shared button-size constants ──────────────────────────────
+static constexpr int kBtnH    = 22;
+static constexpr int kBtnW    = 68;
+static constexpr int kHdrBtnH = 38;
 
 // ══════════════════════════════════════════════════════════════
 // SongLibraryPopup
@@ -294,9 +303,9 @@ void SlideButton::applyScale(double scale)
     setFixedSize(qMax(80, (int)(BASE_W * scale)),
                  qMax(50, (int)(BASE_H * scale)));
     QString tc = m_active ? "#fff"    : "#ccc";
-    QString sc = m_active ? "#aad4ff" : "#888";
-    int fs = qMax(7, (int)(11 * scale));
-    int ls = qMax(7, (int)( 9 * scale));
+    QString sc = m_active ? "#aad4ff" : "#ffff77";
+    int fs = qMax(7, (int)(12 * scale));
+    int ls = qMax(7, (int)(12 * scale));
     m_textLbl->setStyleSheet(
         QString("font-size: %1px; color: %2;").arg(fs).arg(tc));
     m_sectionLbl->setStyleSheet(
@@ -312,8 +321,8 @@ void SlideButton::setActive(bool active)
             "SlideButton { background: #1e6bb8;"
             " border: 2px solid #4da6ff; border-radius: 4px; }");
         m_sectionLbl->setStyleSheet(
-            "font-size: 9px; color: #aad4ff; font-weight: bold;");
-        m_textLbl->setStyleSheet("font-size: 11px; color: #fff;");
+            "font-size: 12px; color: #aad4ff; font-weight: bold;");
+        m_textLbl->setStyleSheet("font-size: 12px; color: #fff;");
     } else {
         setStyleSheet(
             "SlideButton { background: #2a2a2a;"
@@ -321,8 +330,8 @@ void SlideButton::setActive(bool active)
             "SlideButton:hover {"
             " border: 1px solid #888; background: #333; }");
         m_sectionLbl->setStyleSheet(
-            "font-size: 9px; color: #888; font-weight: bold;");
-        m_textLbl->setStyleSheet("font-size: 11px; color: #ccc;");
+            "font-size: 12px; color: #ffff77; font-weight: bold;");
+        m_textLbl->setStyleSheet("font-size: 12px; color: #ccc;");
     }
 }
 
@@ -446,6 +455,12 @@ void LyricsDock::pushSlideFromRemote(const QString &songTitle,
     lyrics_renderer_push(lyrics, section, songTitle);
 }
 
+void LyricsDock::applyScriptureFromRemote(const QString &title, const QString &text)
+{
+    if (m_scriptureTab)
+        m_scriptureTab->applyFromRemote(title, text);
+}
+
 void LyricsDock::saveState()
 {
     QJsonArray arr;
@@ -453,10 +468,25 @@ void LyricsDock::saveState()
         arr.append(id);
     QJsonObject obj;
     obj["sequence"] = arr;
+
+    // Color presets — store each as { "font": 0xRRGGBB, "outline": 0xRRGGBB }
+    QJsonArray presets;
+    for (int i = 0; i < 3; ++i) {
+        if (!m_colorBtn[i]) continue;
+        QJsonObject p;
+        p["font"]    = (qint64)(m_colorBtn[i]->fontColor().rgb()    & 0x00FFFFFF);
+        p["outline"] = (qint64)(m_colorBtn[i]->outlineColor().rgb() & 0x00FFFFFF);
+        presets.append(p);
+    }
+    obj["colorPresets"]  = presets;
+    obj["linesPerSlide"] = m_linesPerSlideSpin ? m_linesPerSlideSpin->value() : 4;
+
     QFile f(statePath());
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(obj).toJson());
-    if (m_mediaGallery) m_mediaGallery->saveState();
+    if (m_mediaGallery)  m_mediaGallery->saveState();
+    if (m_mvTab)         m_mvTab->saveState();
+    if (m_scriptureTab)  m_scriptureTab->saveState();
 }
 
 void LyricsDock::loadState()
@@ -468,6 +498,26 @@ void LyricsDock::loadState()
 
     m_sequenceList->clear();
     m_sequenceSongIds.clear();
+
+    // Restore color presets
+    auto pa = doc.object()["colorPresets"].toArray();
+    for (int i = 0; i < 3 && i < pa.size(); ++i) {
+        if (!m_colorBtn[i]) continue;
+        auto po = pa[i].toObject();
+        uint32_t fc = (uint32_t)po["font"].toInteger(0x00FFFFFF);
+        uint32_t oc = (uint32_t)po["outline"].toInteger(0x00000000);
+        m_colorBtn[i]->setColors(
+            QColor((fc >> 16) & 0xFF, (fc >> 8) & 0xFF, fc & 0xFF),
+            QColor((oc >> 16) & 0xFF, (oc >> 8) & 0xFF, oc & 0xFF));
+    }
+
+    // Restore lines-per-slide setting
+    int lpp = doc.object()["linesPerSlide"].toInt(4);
+    setGlobalLinesPerSlide(lpp);
+    if (m_linesPerSlideSpin) {
+        QSignalBlocker blk(m_linesPerSlideSpin);
+        m_linesPerSlideSpin->setValue(lpp);
+    }
 
     for (const auto &v : doc.object()["sequence"].toArray()) {
         QString id   = v.toString();
@@ -498,7 +548,7 @@ void LyricsDock::buildUi()
     auto *titleLbl = new QLabel("OBS Lyrics Dock");
     titleLbl->setStyleSheet(
         "color: #ccc; font-weight: bold; font-size: 11px;");
-    auto *verLbl = new QLabel("v9.5.1");
+    auto *verLbl = new QLabel("v9.8.0");
     verLbl->setStyleSheet(
         "color: #ff4444; font-size: 9px; font-weight: bold;");
     auto *settingsBtn = new QToolButton;
@@ -583,10 +633,76 @@ void LyricsDock::buildUi()
     // ════════════════════════════════════════════════════════
     // RIGHT — Slides
     // ════════════════════════════════════════════════════════
-    auto *slidesGroup  = new QGroupBox("Slides");
+    // Slides panel: untitled QGroupBox with a manual header row so the
+    // title label, color-preset buttons, and blank-out button all sit on
+    // exactly ONE line.
+    auto *slidesGroup  = new QGroupBox;
+    // Remove the QGroupBox's built-in title-area top margin so no extra
+    // blank space appears above our custom header row.
+    slidesGroup->setStyleSheet(
+        "QGroupBox{margin-top:0px;padding-top:0px;border:1px solid #333;}");
     auto *slidesPanelL = new QVBoxLayout(slidesGroup);
-    slidesPanelL->setContentsMargins(0, 4, 0, 0);
+    slidesPanelL->setContentsMargins(0, 0, 0, 0);
     slidesPanelL->setSpacing(0);
+
+    // Header row — fixed to one line height
+    auto *slidesHeader  = new QWidget;
+    slidesHeader->setFixedHeight(kHdrBtnH + 4); // 48 px — fits kHdrBtnH=44 + 2px margin each side
+    slidesHeader->setStyleSheet("background:#2a2a2a;border-bottom:1px solid #333;");
+    auto *slidesHeaderL = new QHBoxLayout(slidesHeader);
+    slidesHeaderL->setContentsMargins(8, 1, 6, 1);
+    slidesHeaderL->setSpacing(4);
+
+    auto *slidesTitleLbl = new QLabel("Slides");
+    // Bold, same point-size as other panel headers; setFont so it isn't
+    // overridden by a parent widget stylesheet.
+    QFont hdrFont = slidesTitleLbl->font();
+    hdrFont.setBold(true);
+    hdrFont.setPointSize(9);
+    slidesTitleLbl->setFont(hdrFont);
+    slidesTitleLbl->setStyleSheet("color:#ccc;");
+
+    // Color preset buttons (1 2 3) — use kHdrBtnH (2× normal) for the header
+    for (int i = 0; i < 3; ++i) {
+        m_colorBtn[i] = new ColorPresetButton(i + 1, slidesHeader);
+        m_colorBtn[i]->setFixedSize(kBtnW, kHdrBtnH); // override constructor default
+    }
+
+    // Lines-per-slide spinbox
+    auto *lppLbl = new QLabel("Lines:");
+    lppLbl->setStyleSheet("color:#888;font-size:9px;");
+    lppLbl->setToolTip("Lines per slide\n(blank lines always force a new slide)");
+    m_linesPerSlideSpin = new QSpinBox;
+    m_linesPerSlideSpin->setRange(1, 6);
+    m_linesPerSlideSpin->setValue(getGlobalLinesPerSlide());
+    m_linesPerSlideSpin->setFixedWidth(80);
+    m_linesPerSlideSpin->setFixedHeight(kHdrBtnH);
+    m_linesPerSlideSpin->setToolTip(
+        "Max lines per slide.\n"
+        "A blank line in the lyrics always starts a new slide\n"
+        "regardless of this setting.");
+
+    // Lay out: [Slides label]  [gap]  [1] [2] [3]  [Lines: spin]  [stretch]  [■ Blank]
+    slidesHeaderL->addWidget(slidesTitleLbl);
+    slidesHeaderL->addSpacing(6);
+    for (int i = 0; i < 3; ++i)
+        slidesHeaderL->addWidget(m_colorBtn[i]);
+    slidesHeaderL->addSpacing(4);
+    slidesHeaderL->addWidget(lppLbl);
+    slidesHeaderL->addWidget(m_linesPerSlideSpin);
+
+    slidesHeaderL->addStretch();
+
+    m_blackoutBtn = new QPushButton(QString::fromUtf8("\u25A0 Blank"));
+    m_blackoutBtn->setFixedSize(kBtnW, kHdrBtnH);
+    m_blackoutBtn->setToolTip("Blank out lyrics text");
+    m_blackoutBtn->setStyleSheet(
+        "QPushButton{background:#4a1a1a;color:#ff6b6b;"
+        "border:1px solid #8b2020;border-radius:3px;"
+        "font-size:12px;padding:0 2px;}"
+        "QPushButton:hover{background:#6a2020;}");
+    slidesHeaderL->addWidget(m_blackoutBtn);
+    slidesPanelL->addWidget(slidesHeader);
 
     m_slideArea = new QScrollArea;
     m_slideArea->setWidgetResizable(true);
@@ -620,14 +736,6 @@ void LyricsDock::buildUi()
     m_nextBtn->setFixedWidth(36);
     m_nextBtn->setToolTip("Next slide  (Right arrow)");
 
-    m_blackoutBtn = new QPushButton(
-        QString::fromUtf8("\u25A0 Clear"));
-    m_blackoutBtn->setToolTip("Clear lyrics output");
-    m_blackoutBtn->setStyleSheet(
-        "QPushButton { background: #4a1a1a; color: #ff6b6b;"
-        " border: 1px solid #8b2020; border-radius: 3px; padding: 3px 6px; }"
-        "QPushButton:hover { background: #6a2020; }");
-
     m_zoomOutBtn = new QToolButton;
     m_zoomOutBtn->setText("-");
     m_zoomOutBtn->setToolTip("Zoom out");
@@ -649,7 +757,6 @@ void LyricsDock::buildUi()
     ctrlL->addWidget(m_prevBtn);
     ctrlL->addWidget(m_slideCounter);
     ctrlL->addWidget(m_nextBtn);
-    ctrlL->addWidget(m_blackoutBtn);
     ctrlL->addStretch();
     ctrlL->addWidget(m_zoomOutBtn);
     ctrlL->addWidget(m_zoomSlider);
@@ -659,8 +766,8 @@ void LyricsDock::buildUi()
     slidesPanelL->addWidget(m_slideArea, 1);
     slidesPanelL->addWidget(ctrlBar);
 
-    // Media Gallery panel (right)
-    auto *galleryGroup = new QGroupBox("Media Gallery");
+    // Background media panel (right)
+    auto *galleryGroup = new QGroupBox("Background");
     auto *galleryLayout = new QVBoxLayout(galleryGroup);
     galleryLayout->setContentsMargins(0,0,0,0);
     m_mediaGallery = new MediaGallery;
@@ -673,7 +780,26 @@ void LyricsDock::buildUi()
     splitter->setStretchFactor(1, 1);
     splitter->setStretchFactor(2, 0);
     splitter->setSizes({240, 500, 280});
-    root->addWidget(splitter, 1);
+
+    // ── Tab widget ────────────────────────────────────────────
+    auto *tabs = new QTabWidget;
+    tabs->setStyleSheet(
+        "QTabBar::tab { padding: 5px 18px; font-size: 10px; }"
+        "QTabBar::tab:selected { color: #fff; font-weight: bold; }");
+
+    auto *lyricsPage = new QWidget;
+    auto *lyricsPageL = new QVBoxLayout(lyricsPage);
+    lyricsPageL->setContentsMargins(0, 0, 0, 0);
+    lyricsPageL->addWidget(splitter);
+    tabs->addTab(lyricsPage, "Lyrics");
+
+    m_scriptureTab = new ScriptureTab;
+    tabs->addTab(m_scriptureTab, "Scripture");
+
+    m_mvTab = new MvTab;
+    tabs->addTab(m_mvTab, "MV");
+
+    root->addWidget(tabs, 1);
 
     // Connections
     connect(m_addToSeqBtn,     &QPushButton::clicked,
@@ -694,12 +820,92 @@ void LyricsDock::buildUi()
             this, &LyricsDock::onNextSlide);
     connect(m_blackoutBtn,&QPushButton::clicked,
             this, &LyricsDock::onBlackoutClicked);
+    for (int i = 0; i < 3; ++i) {
+        connect(m_colorBtn[i], &ColorPresetButton::colorsApplied,
+                this, [this, i](QColor fc, QColor oc) {
+                    for (int j = 0; j < 3; ++j)
+                        m_colorBtn[j]->setActive(j == i);
+                    onColorPresetApplied(fc, oc);
+                });
+    }
     connect(m_zoomInBtn,  &QToolButton::clicked,
             this, &LyricsDock::onZoomIn);
     connect(m_zoomOutBtn, &QToolButton::clicked,
             this, &LyricsDock::onZoomOut);
     connect(m_zoomSlider, &QSlider::valueChanged,
             this, &LyricsDock::onZoomSlider);
+
+    // Lines-per-slide spinbox: rebuild slides when value changes
+    connect(m_linesPerSlideSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int v) {
+                setGlobalLinesPerSlide(v);
+                int row = m_sequenceList->currentRow();
+                if (row >= 0 && row < m_sequenceSongIds.size()) {
+                    auto *song = SongManager::instance().findById(
+                                     m_sequenceSongIds[row]);
+                    if (song) loadSongSlides(*song);
+                }
+                saveState();
+            });
+
+    // ── Cross-tab: Lyrics gallery media played → stop MV, deselect Scripture gallery ──
+    // We use clearActiveCard (UI-only) so the new media path is not immediately cleared.
+    connect(m_mediaGallery, &MediaGallery::mediaActivated, this, [this](){
+        m_mvTab->stopPlayback();
+        m_scriptureTab->clearActiveCard(); // UI deselect only
+    });
+
+    // ── Cross-tab: MV starts → clear text overlays, deselect both galleries
+    // Do NOT call stopPlayback() on either gallery — that would chain into
+    // lyrics_renderer_media_clear(), which forces s_mvMode=false and destroys
+    // the media source that MV just pushed. Use clearActiveCard() (UI-only).
+    connect(m_mvTab, &MvTab::playbackStarted, this, [this](){
+        lyrics_renderer_scripture_clear(); // clear scripture overlay on canvas
+        m_mediaGallery->clearActiveCard();
+        m_scriptureTab->clearActiveCard(); // UI-only — MV push already owns the source
+    });
+
+    // ── Cross-tab: Background Stop pressed → also stop MV & Scripture
+    connect(m_mediaGallery, &MediaGallery::stopAllRequested, this, [this](){
+        m_mvTab->stopPlayback();
+        m_scriptureTab->stopPlayback();
+    });
+
+    // ── Cross-tab: Scripture gallery activates → deselect Lyrics gallery, stop MV
+    connect(m_scriptureTab, &ScriptureTab::playbackStarted, this, [this](){
+        m_mediaGallery->clearActiveCard(); // UI deselect only
+        m_mvTab->stopPlayback();
+    });
+
+    // ── Combined media list broadcast (Lyrics + Scripture galleries) ──
+    auto broadcastCombinedMedia = [this]() {
+        if (!m_wsServer) return;
+        QStringList combined;
+        if (m_mediaGallery) combined << m_mediaGallery->itemPaths();
+        if (m_scriptureTab) {
+            auto *sg = m_scriptureTab->gallery();
+            if (sg) combined << sg->itemPaths();
+        }
+        m_wsServer->broadcastMediaList(combined);
+    };
+    connect(m_mediaGallery, &MediaGallery::mediaListChanged,
+            this, broadcastCombinedMedia);
+    connect(m_scriptureTab->gallery(), &MediaGallery::mediaListChanged,
+            this, broadcastCombinedMedia);
+
+    // ── Scripture Apply → broadcast full state to WS remotes ─────
+    connect(m_scriptureTab, &ScriptureTab::scriptureStateChanged,
+            this, [this](const QString &title, const QString &text) {
+                if (m_wsServer)
+                    m_wsServer->broadcastScriptureState(title, text);
+            });
+
+    // ── Scripture slide clicked → broadcast the displayed slide to WS remotes
+    connect(m_scriptureTab, &ScriptureTab::scriptureSlideActivated,
+            this, [this](const QString &title, const QString &slideText) {
+                if (m_wsServer)
+                    m_wsServer->broadcastScripture(title, slideText);
+            });
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -969,6 +1175,8 @@ void LyricsDock::onSequenceEditSong()
 
 void LyricsDock::onSlideClicked(int index)
 {
+    // Media from Video/Music/Background panels continues playing —
+    // only the Stop button, natural end, or source deactivation stops it.
     setActiveSlide(index);
     pushCurrentSlide();
 }
@@ -1013,6 +1221,20 @@ void LyricsDock::onSlideEditRequested(int sectionIndex)
     updateSlideCounter();
     lyrics_renderer_clear();
     if (m_wsServer) m_wsServer->broadcastClear();
+}
+
+void LyricsDock::onColorPresetApplied(QColor fontColor, QColor outlineColor)
+{
+    // QColor stores RRGGBB; OBS text_gdiplus uses 0x00BBGGRR (COLORREF).
+    // Byte-swap R↔B before passing to the renderer.
+    uint32_t fc = ((uint32_t)fontColor.blue()    << 16)
+                | ((uint32_t)fontColor.green()    <<  8)
+                | (uint32_t)fontColor.red();
+    uint32_t oc = ((uint32_t)outlineColor.blue()  << 16)
+                | ((uint32_t)outlineColor.green()  <<  8)
+                | (uint32_t)outlineColor.red();
+    lyrics_renderer_set_text_color(fc, oc);
+    saveState(); // persist changed preset colors
 }
 
 void LyricsDock::onNextSlide()

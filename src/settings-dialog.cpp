@@ -148,8 +148,23 @@ void SettingsDialog::buildUi()
     m_qrLbl->setToolTip(
         "Scan this QR code with your mobile device to open the remote");
 
+    auto *pinRow = new QHBoxLayout;
+    auto *pinLbl = new QLabel("Remote PIN:");
+    pinLbl->setToolTip("4-digit PIN required to connect via WebSocket.\nLeave empty to disable PIN authentication.");
+    m_pinEdit = new QLineEdit;
+    m_pinEdit->setPlaceholderText("(leave empty for no PIN)");
+    m_pinEdit->setMaxLength(4);
+    m_pinEdit->setFixedWidth(120);
+    m_pinEdit->setInputMask("9999;_"); // allow 0-4 numeric digits
+    m_pinEdit->setEchoMode(QLineEdit::Normal);
+    m_pinEdit->setToolTip("Enter 4-digit numeric PIN (blank = no auth)");
+    pinRow->addWidget(pinLbl);
+    pinRow->addWidget(m_pinEdit);
+    pinRow->addStretch();
+
     wsLayout->addWidget(m_enableCheck);
     wsLayout->addLayout(portRow);
+    wsLayout->addLayout(pinRow);
     wsLayout->addWidget(m_statusLbl);
     wsLayout->addWidget(m_urlLbl);
     wsLayout->addWidget(m_qrLbl, 0, Qt::AlignLeft);
@@ -253,6 +268,8 @@ void SettingsDialog::onApply()
         srv->start((quint16)m_portSpin->value());
     }
     saveSettings();
+    auto *srv2 = lyricsWsServer();
+    if (srv2) srv2->setPin(m_pinEdit->text().trimmed());
     updateStatus();
 }
 
@@ -272,9 +289,13 @@ void SettingsDialog::saveSettings()
     QJsonObject obj;
     obj["wsEnabled"] = m_enableCheck->isChecked();
     obj["wsPort"]    = m_portSpin->value();
+    obj["wsPin"]     = m_pinEdit->text().trimmed();
     QFile f(settingsPath());
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(obj).toJson());
+    // Push new PIN to the running server immediately
+    auto *srv = lyricsWsServer();
+    if (srv) srv->setPin(m_pinEdit->text().trimmed());
 }
 
 void SettingsDialog::loadSettings()
@@ -293,6 +314,7 @@ void SettingsDialog::loadSettings()
 
     m_portSpin->setValue(obj["wsPort"].toInt(8765));
     m_enableCheck->setChecked(obj["wsEnabled"].toBool(false));
+    m_pinEdit->setText(obj["wsPin"].toString());
 
     m_portSpin->blockSignals(false);
     m_enableCheck->blockSignals(false);

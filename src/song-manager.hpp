@@ -14,11 +14,16 @@ enum class SectionType {
 QString sectionTypeLabel(SectionType t);
 SectionType sectionTypeFromString(const QString &s);
 
+// Global lines-per-slide setting (default 4).
+// Controlled by the spinbox in the slides header.
+void setGlobalLinesPerSlide(int n);
+int  getGlobalLinesPerSlide();
+
 struct LyricsSection {
     SectionType type  = SectionType::Verse;
     QString     label;
     QString     text;
-    QList<QString> slides() const; // split into 4-line chunks
+    QList<QString> slides() const; // split respecting blank-line breaks + global lpp
     QJsonObject toJson() const;
     static LyricsSection fromJson(const QJsonObject &o);
 };

@@ -16,11 +16,11 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
   height:100vh;overflow:hidden;display:flex;flex-direction:column;}
 
 /* ── Screens ── */
-#roleScreen,#viewerModeScreen{
+#roleScreen,#viewerModeScreen,#pinScreen{
   display:flex;flex-direction:column;align-items:center;
   justify-content:center;height:100vh;gap:16px;padding:24px;}
-#roleScreen h1,#viewerModeScreen h1{font-size:20px;color:var(--accent);margin-bottom:4px;}
-#roleScreen p,#viewerModeScreen p{color:var(--text2);font-size:13px;text-align:center;margin-bottom:8px;}
+#roleScreen h1,#viewerModeScreen h1,#pinScreen h1{font-size:20px;color:var(--accent);margin-bottom:4px;}
+#roleScreen p,#viewerModeScreen p,#pinScreen p{color:var(--text2);font-size:13px;text-align:center;margin-bottom:8px;}
 .roleBtn{width:100%;max-width:320px;padding:18px;border-radius:12px;
   border:2px solid var(--border);background:var(--bg2);color:var(--text);
   font-size:17px;font-weight:600;cursor:pointer;
@@ -33,6 +33,17 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 .roleBtn.conf{border-color:#888;}
 .roleBtn.score{border-color:var(--warn);}
 .roleBtn.score:active{background:#3a2a00;}
+
+/* PIN screen */
+#pinInput{width:160px;padding:12px;font-size:22px;letter-spacing:8px;
+  text-align:center;border-radius:8px;border:2px solid var(--accent);
+  background:var(--bg2);color:var(--text);margin:8px 0;}
+#pinInput:focus{outline:none;border-color:#88ccff;}
+#pinError{color:var(--danger);font-size:13px;display:none;margin-top:4px;}
+#pinSubmit{width:100%;max-width:200px;padding:13px;border-radius:8px;
+  border:none;background:var(--accent);color:#000;font-size:15px;
+  font-weight:700;cursor:pointer;}
+#pinSubmit:active{opacity:0.8;}
 
 /* ── App shell ── */
 #app{display:none;flex-direction:column;height:100vh;}
@@ -124,6 +135,24 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 .mediaIcon{font-size:18px;flex-shrink:0;}
 .mediaName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
+/* ── MV ── */
+.mvSubTitle{font-size:10px;color:var(--text2);text-transform:uppercase;
+  letter-spacing:1px;margin:8px 2px 4px;padding-bottom:3px;
+  border-bottom:1px solid var(--border);}
+.mvItem{background:var(--bg2);border-radius:8px;margin-bottom:5px;
+  padding:10px 12px;cursor:pointer;border:2px solid var(--border);
+  font-size:12px;display:flex;align-items:center;gap:10px;}
+.mvItem:active{background:var(--bg3);}
+.mvItem.active{border-color:var(--accent);color:var(--accent);}
+.mvItemName{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+#mvNowPlaying{background:var(--bg2);border:1px solid var(--border);
+  border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12px;
+  display:flex;align-items:center;gap:8px;}
+#mvNowPlayingIcon{font-size:16px;}
+#mvNowPlayingName{color:var(--accent);flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#mvNowPlayingMode{font-size:10px;color:var(--text2);}
+
 /* ── Controls ── */
 .ctrlSection{margin-bottom:14px;}
 .ctrlTitle{font-size:10px;color:var(--text2);text-transform:uppercase;
@@ -136,6 +165,14 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 .ctrlBtn.primary{background:#1a3a5c;color:var(--accent);border:1px solid #2a5a8c;}
 .ctrlBtn.ok{background:#1a4a2a;color:var(--success);border:1px solid #2a7a3a;}
 
+/* ── Scripture ── */
+.scripSlide{background:var(--bg2);border-radius:8px;margin-bottom:6px;
+  padding:11px 14px;cursor:pointer;border:2px solid var(--border);font-size:13px;
+  white-space:pre-wrap;line-height:1.5;}
+.scripSlide:active{background:var(--bg3);}
+.scripSlide.active{border-color:var(--accent);background:#0a1f35;color:#fff;}
+.scripSlideNum{font-size:10px;color:var(--text2);margin-bottom:4px;}
+
 /* ── Misc ── */
 .emptyState{text-align:center;color:var(--text2);padding:36px 20px;font-size:13px;}
 #reconnBanner{display:none;position:fixed;top:0;left:0;right:0;
@@ -146,13 +183,24 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 <body>
 <div id="reconnBanner">Connection lost — reconnecting...</div>
 
+<!-- ── PIN screen ── -->
+<div id="pinScreen" style="display:none">
+  <h1>🔒 PIN Required</h1>
+  <p>This server requires a PIN to connect.</p>
+  <input id="pinInput" type="password" inputmode="numeric"
+    maxlength="4" placeholder="· · · ·"
+    onkeydown="if(event.key==='Enter')submitPin()">
+  <div id="pinError">Incorrect PIN — try again</div>
+  <button id="pinSubmit" onclick="submitPin()">Connect</button>
+</div>
+
 <!-- ── Role selection ── -->
-<div id="roleScreen">
+<div id="roleScreen" style="display:none">
   <h1>🎵 OBS Lyrics Remote</h1>
   <p>Choose your role</p>
   <button class="roleBtn manager" onclick="chooseRole('manager')">
     🎛️ Manager
-    <span>Full control — slides, scenes, media</span>
+    <span>Full control — slides, scenes, media, MV</span>
   </button>
   <button class="roleBtn viewer" onclick="showViewerModeScreen()">
     👁️ Viewer
@@ -182,14 +230,16 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
     <div id="connDot"></div>
     <span id="statusText">Connecting...</span>
     <span id="roleTag">Manager</span>
-    <span style="color:#444;font-size:10px;margin-left:4px">v9.5.1</span>
+    <span style="color:#444;font-size:10px;margin-left:4px">v9.7.0</span>
   </div>
 
   <!-- Manager tabs -->
   <div id="tabBar">
     <div class="tab active" onclick="showTab('songs')">Songs</div>
+    <div class="tab" onclick="showTab('scripture')">Scripture</div>
     <div class="tab" onclick="showTab('scenes')">Scenes</div>
     <div class="tab" onclick="showTab('media')">Media</div>
+    <div class="tab" onclick="showTab('mv')">MV</div>
     <div class="tab" onclick="showTab('controls')">Controls</div>
   </div>
 
@@ -197,21 +247,72 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
     <div class="panel active" id="panel-songs">
       <div id="songList"><div class="emptyState">Loading sequence...</div></div>
     </div>
+    <div class="panel" id="panel-scripture">
+      <!-- Title -->
+      <div style="margin-bottom:8px">
+        <div style="font-size:10px;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Title (e.g. Genesis 1:1)</div>
+        <input id="scripTitleInput" type="text" placeholder="Scripture reference..."
+          style="width:100%;padding:8px 10px;background:var(--bg2);color:var(--text);
+          border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
+      </div>
+      <!-- Text -->
+      <div style="margin-bottom:8px">
+        <div style="font-size:10px;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Text (paste scripture)</div>
+        <textarea id="scripTextInput" rows="7" placeholder="Paste scripture text here..."
+          style="width:100%;padding:8px 10px;background:var(--bg2);color:var(--text);
+          border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;
+          resize:vertical;-webkit-overflow-scrolling:touch;"></textarea>
+      </div>
+      <!-- Apply + Clear row -->
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button onclick="applyScripture()"
+          style="flex:1;padding:11px;background:#1a3a5c;color:#4da6ff;
+          border:1px solid #2a5a8c;border-radius:6px;font-size:13px;
+          font-weight:700;cursor:pointer;">▶ Apply</button>
+        <button onclick="clearScripture()"
+          style="padding:11px 16px;background:#3a1a1a;color:#ff8888;
+          border:1px solid #662222;border-radius:6px;font-size:13px;cursor:pointer;">⬛ Clear</button>
+      </div>
+      <!-- Slides -->
+      <div style="font-size:10px;color:var(--text2);margin-bottom:5px;text-transform:uppercase;letter-spacing:1px">Slides — tap to display</div>
+      <div id="scripSlideList"><div class="emptyState">Press Apply to generate slides</div></div>
+    </div>
+
     <div class="panel" id="panel-scenes">
       <div id="sceneList"><div class="emptyState">Loading scenes...</div></div>
     </div>
     <div class="panel" id="panel-media">
       <div style="padding:0 2px 8px">
         <button class="ctrlBtn danger" onclick="send({type:'clearMedia'})">
-          ⬛ Clear Media</button>
+          ⬛ Stop Background Media</button>
       </div>
       <div id="mediaList"><div class="emptyState">No media items</div></div>
+    </div>
+    <div class="panel" id="panel-mv">
+      <!-- Now-playing bar -->
+      <div id="mvNowPlaying" style="display:none">
+        <span id="mvNowPlayingIcon">🎬</span>
+        <span id="mvNowPlayingName">—</span>
+        <span id="mvNowPlayingMode"></span>
+        <button onclick="send({type:'mvStop'})" style="
+          background:#5c1a1a;color:#ff6b6b;border:1px solid #8b2020;
+          border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;
+          flex-shrink:0;">■ Stop</button>
+      </div>
+      <div class="mvSubTitle">🎬 Videos</div>
+      <div id="mvVideoList"><div class="emptyState">No videos loaded</div></div>
+      <div class="mvSubTitle">🎵 Music</div>
+      <div id="mvMusicList"><div class="emptyState">No music loaded</div></div>
     </div>
     <div class="panel" id="panel-controls">
       <div class="ctrlSection">
         <div class="ctrlTitle">Lyrics</div>
         <button class="ctrlBtn danger" onclick="send({type:'clearLyrics'})">⬛ Blackout Lyrics</button>
-        <button class="ctrlBtn warn"   onclick="send({type:'clearMedia'})">⬛ Clear Media</button>
+        <button class="ctrlBtn warn"   onclick="send({type:'clearMedia'})">⬛ Stop Background Media</button>
+      </div>
+      <div class="ctrlSection">
+        <div class="ctrlTitle">MV</div>
+        <button class="ctrlBtn danger" onclick="send({type:'mvStop'})">⬛ Stop MV</button>
       </div>
       <div class="ctrlSection">
         <div class="ctrlTitle">Streaming</div>
@@ -268,33 +369,58 @@ var ws=null, myRole=null, viewerMode=null;
 var currentScene=null, currentSlide=-1, currentMedia=null;
 var isStreaming=false, isRecording=false;
 var songData=[], sceneList=[], mediaData=[], reconnTimer=null;
-var scoreFontSize=15; // default score text font size in px
-var scoreFollowMode=false;  // when true, score view tracks active slide
-var scoreActiveSongIdx=-1;  // which song index is currently active in score
+var scoreFontSize=15;
+var scoreFollowMode=false;
+var scoreActiveSongIdx=-1;
+var mvVideoData=[], mvMusicData=[];
+var mvMode='', mvPath='';
+var needPin=false;
+var scripActiveSlide=-1;  // index of currently active scripture slide
 
 // ── Connection ────────────────────────────────────────────────
 function connect(){
+  // Guard: don't open a new connection if already connecting or connected
+  if(ws && ws.readyState < 2) return;
+  // Close any stale socket cleanly before creating a new one
+  if(ws){ ws.onclose=null; ws.onerror=null; try{ws.close();}catch(e){} ws=null; }
+  clearTimeout(reconnTimer);
+
   var host=location.hostname||'127.0.0.1', port=location.port||'8765';
   ws=new WebSocket('ws://'+host+':'+port);
   ws.onopen=function(){
-    clearTimeout(reconnTimer);
     document.getElementById('reconnBanner').style.display='none';
     document.getElementById('connDot').classList.add('ok');
     document.getElementById('statusText').textContent='Connected';
-    if(myRole) send({type:'setRole',role:myRole});
+    // If we already authenticated in a previous session, re-send role
+    if(myRole && !needPin) send({type:'setRole',role:myRole});
   };
   ws.onmessage=function(e){ try{handleMsg(JSON.parse(e.data));}catch(x){console.error(x);} };
   ws.onclose=ws.onerror=function(){
     document.getElementById('connDot').classList.remove('ok');
     document.getElementById('statusText').textContent='Disconnected';
     document.getElementById('reconnBanner').style.display='block';
-    reconnTimer=setTimeout(connect,3000);
+    reconnTimer=setTimeout(connect, 3000);
   };
 }
 function send(obj){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(obj)); }
 
+// ── PIN ───────────────────────────────────────────────────────
+function showPinScreen(){
+  needPin=true;
+  document.getElementById('pinScreen').style.display='flex';
+  document.getElementById('roleScreen').style.display='none';
+  document.getElementById('viewerModeScreen').style.display='none';
+  document.getElementById('app').style.display='none';
+  setTimeout(function(){ document.getElementById('pinInput').focus(); },100);
+}
+function submitPin(){
+  var pin=document.getElementById('pinInput').value;
+  send({type:'auth',pin:pin});
+}
+
 // ── Role screens ──────────────────────────────────────────────
 function showRoleScreen(){
+  document.getElementById('pinScreen').style.display='none';
   document.getElementById('roleScreen').style.display='flex';
   document.getElementById('viewerModeScreen').style.display='none';
 }
@@ -304,8 +430,9 @@ function showViewerModeScreen(){
 }
 
 function chooseRole(role){
-  myRole=role; viewerMode=null;
+  myRole=role; viewerMode=null; needPin=false;
   send({type:'setRole',role:role});
+  document.getElementById('pinScreen').style.display='none';
   document.getElementById('roleScreen').style.display='none';
   document.getElementById('viewerModeScreen').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -319,8 +446,9 @@ function chooseRole(role){
 }
 
 function chooseViewerMode(mode){
-  myRole='viewer'; viewerMode=mode;
+  myRole='viewer'; viewerMode=mode; needPin=false;
   send({type:'setRole',role:'viewer'});
+  document.getElementById('pinScreen').style.display='none';
   document.getElementById('roleScreen').style.display='none';
   document.getElementById('viewerModeScreen').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -346,12 +474,27 @@ function chooseViewerMode(mode){
 // ── Message handler ───────────────────────────────────────────
 function handleMsg(msg){
   switch(msg.type){
+    case 'auth':
+      if(msg.result==='required'){
+        showPinScreen();
+      } else if(msg.result==='ok'){
+        needPin=false;
+        document.getElementById('pinError').style.display='none';
+        document.getElementById('pinInput').value='';
+        showRoleScreen();
+      } else if(msg.result==='denied'){
+        document.getElementById('pinError').style.display='block';
+        document.getElementById('pinInput').value='';
+        document.getElementById('pinInput').focus();
+      }
+      break;
     case 'state':
       updateSlideActive(msg.slideIndex);
       if(msg.lyrics!==undefined) updateConf(msg.slideIndex, msg.lyrics, msg.section, msg.title);
       if(scoreFollowMode && msg.slideIndex>=0) applyScoreFollow(msg.slideIndex, msg.title);
       currentScene=msg.scene; currentMedia=msg.mediaPath;
       isStreaming=msg.streaming||false; isRecording=msg.recording||false;
+      if(msg.mvMode!==undefined){ mvMode=msg.mvMode||''; mvPath=msg.mvPath||''; renderMvState(); }
       renderScenes(); renderMedia(); updateStreamBtns();
       break;
     case 'slideUpdate':
@@ -365,16 +508,45 @@ function handleMsg(msg){
       currentMedia=msg.path; renderMedia(); break;
     case 'songs':
       songData=msg.songs||[];
-      renderSongs();
-      renderScoreSongList();
-      // If in follow mode and we now have song data, apply follow
-      if(scoreFollowMode && currentSlide>=0)
-        applyScoreFollow(currentSlide, null);
+      renderSongs(); renderScoreSongList();
+      if(scoreFollowMode && currentSlide>=0) applyScoreFollow(currentSlide, null);
       break;
     case 'scenes':
       sceneList=msg.scenes||[]; currentScene=msg.currentScene; renderScenes(); break;
     case 'mediaList':
       mediaData=msg.items||[]; renderMedia(); break;
+    case 'mvState':
+      mvMode=msg.mode||''; mvPath=msg.path||''; renderMvState(); break;
+    case 'mvLists':
+      mvVideoData=msg.videos||[]; mvMusicData=msg.music||[];
+      renderMvVideoList(); renderMvMusicList(); break;
+    case 'mvVideoList':
+      mvVideoData=msg.videos||[]; renderMvVideoList(); break;
+    case 'mvMusicList':
+      mvMusicData=msg.music||[]; renderMvMusicList(); break;
+    case 'scriptureState':
+      // OBS dock pressed Apply — sync title+text fields and rebuild slides.
+      { var ti=document.getElementById('scripTitleInput');
+        var tx=document.getElementById('scripTextInput');
+        if(ti) ti.value=msg.title||'';
+        if(tx) tx.value=msg.text||'';
+        scripSlides=parseScripSlides(msg.text||'');
+        scripActiveSlide=-1;
+        renderScripSlides(); }
+      break;
+    case 'scriptureUpdate':
+      // A slide was pushed to OBS — highlight it in the slide list if visible.
+      if(!msg.title && !msg.text) {
+        scripActiveSlide=-1; renderScripSlides();
+      } else {
+        // Find which slide index matches the displayed text
+        var matchIdx=-1;
+        for(var si=0;si<scripSlides.length;si++){
+          if(scripSlides[si]===msg.text){ matchIdx=si; break; }
+        }
+        if(matchIdx>=0){ scripActiveSlide=matchIdx; renderScripSlides(); }
+      }
+      break;
   }
 }
 
@@ -401,9 +573,7 @@ function updateConf(idx, lyrics, section, title){
 function renderSongs(){
   var el=document.getElementById('songList');
   if(!songData.length){
-    el.innerHTML='<div class="emptyState">Waiting for sequence...<br>'
-      +'<small>Songs will appear once OBS sequence is loaded</small></div>';
-    return;
+    el.innerHTML='<div class="emptyState">Waiting for sequence...</div>'; return;
   }
   el.innerHTML=songData.map(function(song,si){
     var slides=song.slides||[];
@@ -427,7 +597,6 @@ function renderSongs(){
       }).join('')
       +'</div></div>';
   }).join('');
-  // Re-highlight active slide
   updateSlideActive(currentSlide);
 }
 
@@ -460,113 +629,75 @@ function renderScoreSongList(){
 }
 
 function onScoreSongChanged(){
-  // User manually selected a song — disable follow mode
-  scoreFollowMode=false;
-  updateFollowBtn();
-  renderScore();
+  scoreFollowMode=false; updateFollowBtn(); renderScore();
 }
-
 function toggleFollow(){
-  scoreFollowMode=!scoreFollowMode;
-  updateFollowBtn();
-  if(scoreFollowMode && currentSlide>=0){
-    // Find which song contains currentSlide and jump there
-    applyScoreFollow(currentSlide, null);
-  }
+  scoreFollowMode=!scoreFollowMode; updateFollowBtn();
+  if(scoreFollowMode && currentSlide>=0) applyScoreFollow(currentSlide, null);
 }
-
 function updateFollowBtn(){
   var btn=document.getElementById('followBtn');
   if(!btn) return;
   if(scoreFollowMode){
-    btn.style.background='var(--accent)';
-    btn.style.color='#000';
-    btn.style.borderColor='var(--accent)';
-    btn.textContent='Following';
+    btn.style.background='var(--accent)'; btn.style.color='#000';
+    btn.style.borderColor='var(--accent)'; btn.textContent='Following';
   } else {
-    btn.style.background='var(--bg3)';
-    btn.style.color='var(--text2)';
-    btn.style.borderColor='var(--border)';
-    btn.textContent='Follow';
+    btn.style.background='var(--bg3)'; btn.style.color='var(--text2)';
+    btn.style.borderColor='var(--border)'; btn.textContent='Follow';
   }
 }
-
-// Called when a slideUpdate arrives and follow mode is on.
-// Finds the song that contains the active slide and switches score view to it.
 function applyScoreFollow(slideIdx, title){
   if(!songData.length) return;
-  // Find song by title match or by searching slideIndex ranges
   var foundSongIdx=-1;
   for(var si=0;si<songData.length;si++){
     var slides=songData[si].slides||[];
     for(var i=0;i<slides.length;i++){
-      if(slides[i].slideIndex===slideIdx){
-        foundSongIdx=si; break;
-      }
+      if(slides[i].slideIndex===slideIdx){ foundSongIdx=si; break; }
     }
     if(foundSongIdx>=0) break;
   }
-  // If not found by slideIndex, try by title
   if(foundSongIdx<0 && title){
     for(var si=0;si<songData.length;si++){
       if(songData[si].title===title){ foundSongIdx=si; break; }
     }
   }
   if(foundSongIdx<0) return;
-  // Switch song selector if needed
   var sel=document.getElementById('scoreSongSelect');
   if(sel && parseInt(sel.value)!==foundSongIdx){
     sel.value=String(foundSongIdx);
     scoreActiveSongIdx=foundSongIdx;
     renderScore();
   }
-  // Highlight the active slide
   highlightScoreSlide(slideIdx);
 }
-
 function highlightScoreSlide(slideIdx){
   document.querySelectorAll('.scoreSlide').forEach(function(el){
     el.classList.toggle('active', parseInt(el.dataset.slideIdx)===slideIdx);
   });
-  // Scroll active slide into view
   var active=document.querySelector('.scoreSlide.active');
   if(active) active.scrollIntoView({behavior:'smooth',block:'center'});
 }
-
 function renderScore(){
   var sel=document.getElementById('scoreSongSelect');
   var body=document.getElementById('scoreBody');
   var idx=parseInt(sel.value);
   if(isNaN(idx)||!songData[idx]){
-    body.innerHTML='<div class="emptyState">'+
-      (songData.length ? 'Select a song above' : 'Waiting for sequence data...<br><small>Songs will appear once OBS sequence is loaded</small>')+
-      '</div>';
+    body.innerHTML='<div class="emptyState">'+(songData.length?'Select a song above':'Waiting for sequence...')+'</div>';
     return;
   }
   var song=songData[idx];
   var slides=song.slides||[];
-  if(!slides.length){
-    body.innerHTML='<div class="emptyState">This song has no slides</div>';
-    return;
-  }
-  // Group slides by label (section grouping)
+  if(!slides.length){ body.innerHTML='<div class="emptyState">This song has no slides</div>'; return; }
   var sections=[], curLabel=null, curSlides=[];
   slides.forEach(function(sl){
     if(sl.label!==curLabel){
       if(curSlides.length) sections.push({label:curLabel,slides:curSlides});
       curLabel=sl.label; curSlides=[sl];
-    } else {
-      curSlides.push(sl);
-    }
+    } else { curSlides.push(sl); }
   });
   if(curSlides.length) sections.push({label:curLabel,slides:curSlides});
-
-  // Re-apply active highlight after re-render if in follow mode
-  if(scoreFollowMode && currentSlide>=0){
-    setTimeout(function(){ highlightScoreSlide(currentSlide); },0);
-  }
-  body.innerHTML='<h2 style="font-size:16px;margin-bottom:4px;color:#fff">'
-    +esc(song.title)+'</h2>'
+  if(scoreFollowMode && currentSlide>=0) setTimeout(function(){ highlightScoreSlide(currentSlide); },0);
+  body.innerHTML='<h2 style="font-size:16px;margin-bottom:4px;color:#fff">'+esc(song.title)+'</h2>'
     +(song.artist?'<div style="font-size:12px;color:var(--text2);margin-bottom:16px">'+esc(song.artist)+'</div>':'')
     +sections.map(function(sec){
       return '<div class="scoreSection">'
@@ -592,12 +723,10 @@ function renderScenes(){
 }
 function switchScene(n){ send({type:'switchScene',scene:n}); currentScene=n; renderScenes(); }
 
-// ── Media ─────────────────────────────────────────────────────
+// ── Background Media ──────────────────────────────────────────
 function renderMedia(){
   var el=document.getElementById('mediaList');
-  if(!mediaData.length){
-    el.innerHTML='<div class="emptyState">No media in gallery</div>'; return;
-  }
+  if(!mediaData.length){ el.innerHTML='<div class="emptyState">No media in gallery</div>'; return; }
   el.innerHTML=mediaData.map(function(item){
     var isVid=/\.(mp4|mov|avi|mkv|webm|flv|wmv|m4v)$/i.test(item);
     var name=item.split(/[\\/]/).pop();
@@ -610,7 +739,61 @@ function renderMedia(){
       +'</div>';
   }).join('');
 }
-function pushMedia(p){ send({type:'pushMedia',path:p,fadeMs:500}); }
+function pushMedia(p){ send({type:'pushMedia',path:p,fadeMs:500}); currentMedia=p; renderMedia(); }
+
+// ── MV ────────────────────────────────────────────────────────
+function renderMvState(){
+  var bar=document.getElementById('mvNowPlaying');
+  if(!mvMode){
+    bar.style.display='none';
+  } else {
+    bar.style.display='flex';
+    var name=mvPath?mvPath.split(/[\\/]/).pop():'—';
+    document.getElementById('mvNowPlayingIcon').textContent=(mvMode==='video')?'🎬':'🎵';
+    document.getElementById('mvNowPlayingName').textContent=name;
+    document.getElementById('mvNowPlayingMode').textContent=mvMode==='video'?'Video':'Music';
+  }
+  renderMvVideoList();
+  renderMvMusicList();
+}
+function renderMvVideoList(){
+  var el=document.getElementById('mvVideoList');
+  if(!mvVideoData.length){ el.innerHTML='<div class="emptyState">No videos loaded in OBS</div>'; return; }
+  el.innerHTML=mvVideoData.map(function(p){
+    var name=p.split(/[\\/]/).pop();
+    var active=(mvMode==='video' && p===mvPath);
+    return '<div class="mvItem '+(active?'active':'')+'"'
+      +' onclick="mvPlayVideo(\''+escJs(p)+'\')">'
+      +'<span>🎬</span>'
+      +'<span class="mvItemName">'+esc(name)+'</span>'
+      +(active?'<span style="color:var(--accent)">&#9654;</span>':'')
+      +'</div>';
+  }).join('');
+}
+function renderMvMusicList(){
+  var el=document.getElementById('mvMusicList');
+  if(!mvMusicData.length){ el.innerHTML='<div class="emptyState">No music loaded in OBS</div>'; return; }
+  el.innerHTML=mvMusicData.map(function(p){
+    var name=p.split(/[\\/]/).pop();
+    var active=(mvMode==='music' && p===mvPath);
+    return '<div class="mvItem '+(active?'active':'')+'"'
+      +' onclick="mvPlayMusic(\''+escJs(p)+'\')">'
+      +'<span>🎵</span>'
+      +'<span class="mvItemName">'+esc(name)+'</span>'
+      +(active?'<span style="color:var(--accent)">&#9654;</span>':'')
+      +'</div>';
+  }).join('');
+}
+function mvPlayVideo(path){
+  mvMode='video'; mvPath=path;
+  send({type:'mvPlayVideo',path:path,fadeMs:500});
+  renderMvState();
+}
+function mvPlayMusic(path){
+  mvMode='music'; mvPath=path;
+  send({type:'mvPlayMusic',path:path});
+  renderMvState();
+}
 
 // ── Stream / record ───────────────────────────────────────────
 function toggleStream(){
@@ -632,7 +815,7 @@ function updateStreamBtns(){
 
 // ── Tabs ──────────────────────────────────────────────────────
 function showTab(name){
-  var tabs=['songs','scenes','media','controls'];
+  var tabs=['songs','scripture','scenes','media','mv','controls'];
   document.querySelectorAll('.tab').forEach(function(t,i){
     t.classList.toggle('active',tabs[i]===name);
   });
@@ -651,17 +834,80 @@ function escJs(s){
   return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")
     .replace(/\n/g,'\\n').replace(/\r/g,'');
 }
-
 function changeFontSize(delta){
   scoreFontSize=Math.max(10,Math.min(40,scoreFontSize+delta));
   document.querySelectorAll('.scoreSlideText').forEach(function(el){
     el.style.fontSize=scoreFontSize+'px';
   });
-  // Also persist in CSS for next renderScore() call
-  document.documentElement.style.setProperty(
-    '--score-font-size', scoreFontSize+'px');
+  document.documentElement.style.setProperty('--score-font-size', scoreFontSize+'px');
 }
 
+// ── Scripture ─────────────────────────────────────────────────
+// Paragraph-aware slide parser: blank lines = paragraph break, 4 lines per slide.
+function parseScripSlides(text){
+  var lpp=4, lines=text.split('\n'), result=[], para=[];
+  function flushPara(){
+    if(!para.length) return;
+    for(var i=0;i<para.length;i+=lpp){
+      var chunk=para.slice(i,i+lpp);
+      if(chunk.length) result.push(chunk.join('\n'));
+    }
+    para=[];
+  }
+  for(var i=0;i<lines.length;i++){
+    if(lines[i].trim()==='') flushPara();
+    else para.push(lines[i]);
+  }
+  flushPara();
+  return result;
+}
+
+// scripSlides holds the parsed slides after Apply; used by pushScripSlide.
+var scripSlides=[];
+
+function applyScripture(){
+  var title=(document.getElementById('scripTitleInput')||{}).value||'';
+  var text=(document.getElementById('scripTextInput')||{}).value||'';
+  scripSlides=parseScripSlides(text);
+  scripActiveSlide=-1;
+  renderScripSlides();
+  // Send full title+text to OBS so it rebuilds its own slide grid too
+  send({type:'applyScripture', title:title, text:text});
+}
+
+function renderScripSlides(){
+  var el=document.getElementById('scripSlideList');
+  if(!el) return;
+  if(!scripSlides.length){
+    el.innerHTML='<div class="emptyState">Press Apply to generate slides</div>';
+    return;
+  }
+  el.innerHTML=scripSlides.map(function(sl,i){
+    return '<div class="scripSlide'+(i===scripActiveSlide?' active':'')+'"'
+      +' onclick="pushScripSlide('+i+')">'
+      +'<div class="scripSlideNum">Slide '+(i+1)+' / '+scripSlides.length+'</div>'
+      +esc(sl)
+      +'</div>';
+  }).join('');
+}
+
+function pushScripSlide(idx){
+  if(idx<0||idx>=scripSlides.length) return;
+  var title=(document.getElementById('scripTitleInput')||{}).value||'';
+  scripActiveSlide=idx;
+  renderScripSlides();
+  send({type:'pushScriptureSlide', title:title, text:scripSlides[idx]});
+}
+
+function clearScripture(){
+  scripActiveSlide=-1;
+  scripSlides=[];
+  renderScripSlides();
+  send({type:'clearScripture'});
+}
+
+// Show role screen initially (or PIN screen if auth required)
+showRoleScreen();
 connect();
 </script>
 </body>

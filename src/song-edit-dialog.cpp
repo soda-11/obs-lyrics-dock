@@ -1,4 +1,4 @@
-// song-edit-dialog.cpp  v5.0
+// song-edit-dialog.cpp  v9.8.0
 #include "song-edit-dialog.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -251,11 +251,17 @@ bool SongEditDialog::checkDuplicateTitle(const QString &title)
 void SongEditDialog::populateSectionList()
 {
     int cur = m_sectionList->currentRow();
+    m_sectionList->blockSignals(true);
     m_sectionList->clear();
-    for (const auto &sec : m_song.sections)
-        m_sectionList->addItem(
+    for (int i = 0; i < m_song.sections.size(); ++i) {
+        const auto &sec = m_song.sections[i];
+        auto *item = new QListWidgetItem(
             sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label);
+        item->setData(Qt::UserRole, i);
+        m_sectionList->addItem(item);
+    }
     m_sectionList->setCurrentRow(qBound(0, cur, m_sectionList->count()-1));
+    m_sectionList->blockSignals(false);
 }
 
 void SongEditDialog::loadSectionIntoEditor(int idx)
@@ -301,18 +307,35 @@ void SongEditDialog::onSectionSelected(int row)
 
 void SongEditDialog::onSectionOrderChanged()
 {
-    saveCurrentSection();
+    // Save editor content into the DATA for the current section.
+    // Do NOT call saveCurrentSection() here — it also updates item text via
+    // m_sectionList->item(m_currentSection)->setText(...), but after a drag
+    // the item that now occupies row m_currentSection is a DIFFERENT section,
+    // so that write corrupts the wrong item's label.
+    if (m_currentSection >= 0 && m_currentSection < m_song.sections.size()) {
+        auto &sec = m_song.sections[m_currentSection];
+        sec.type  = static_cast<SectionType>(
+            m_sectionTypeCombo->currentData().toInt());
+        sec.label = m_sectionLabelEdit->text();
+        sec.text  = m_sectionTextEdit->toPlainText();
+    }
+    // Rebuild sections array in the new visual order using UserRole indices.
     QList<LyricsSection> reordered;
     for (int i = 0; i < m_sectionList->count(); ++i) {
-        QString lbl = m_sectionList->item(i)->text();
-        for (const auto &sec : m_song.sections) {
-            QString sl = sec.label.isEmpty()
-                         ? sectionTypeLabel(sec.type) : sec.label;
-            if (sl == lbl) { reordered << sec; break; }
-        }
+        int origIdx = m_sectionList->item(i)->data(Qt::UserRole).toInt();
+        if (origIdx >= 0 && origIdx < m_song.sections.size())
+            reordered << m_song.sections[origIdx];
     }
-    m_song.sections  = reordered;
+    m_song.sections = reordered;
+    // Refresh UserRole indices AND item labels from the now-correct data array.
+    for (int i = 0; i < m_sectionList->count(); ++i) {
+        m_sectionList->item(i)->setData(Qt::UserRole, i);
+        const auto &sec = m_song.sections[i];
+        m_sectionList->item(i)->setText(
+            sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label);
+    }
     m_currentSection = m_sectionList->currentRow();
+    loadSectionIntoEditor(m_currentSection);
 }
 
 void SongEditDialog::onAddSection()
@@ -322,7 +345,10 @@ void SongEditDialog::onAddSection()
     s.type  = SectionType::Verse;
     s.label = "Verse " + QString::number(m_song.sections.size() + 1);
     m_song.sections << s;
-    m_sectionList->addItem(s.label);
+    // Must store index as UserRole so drag-reorder can match by index, not label.
+    auto *item = new QListWidgetItem(s.label);
+    item->setData(Qt::UserRole, m_song.sections.size() - 1);
+    m_sectionList->addItem(item);
     m_sectionList->setCurrentRow(m_song.sections.size() - 1);
 }
 
@@ -352,6 +378,7 @@ void SongEditDialog::onMoveSectionUp()
     int row = m_sectionList->currentRow();
     if (row <= 0) return;
     saveCurrentSection();
+    m_currentSection = -1; // prevent populateSectionList re-triggering a save
     m_song.sections.swapItemsAt(row, row-1);
     populateSectionList();
     m_sectionList->setCurrentRow(row-1);
@@ -362,6 +389,7 @@ void SongEditDialog::onMoveSectionDown()
     int row = m_sectionList->currentRow();
     if (row < 0 || row >= m_song.sections.size()-1) return;
     saveCurrentSection();
+    m_currentSection = -1; // prevent populateSectionList re-triggering a save
     m_song.sections.swapItemsAt(row, row+1);
     populateSectionList();
     m_sectionList->setCurrentRow(row+1);

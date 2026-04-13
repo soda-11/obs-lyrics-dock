@@ -1,4 +1,4 @@
-// song-manager.cpp  v2.0
+// song-manager.cpp  v2.1
 #include "song-manager.hpp"
 
 #include <QFile>
@@ -36,19 +36,49 @@ SectionType sectionTypeFromString(const QString &s)
     return SectionType::Custom;
 }
 
+// ── Global lines-per-slide setting ───────────────────────────
+static int g_linesPerSlide = 4;
+void setGlobalLinesPerSlide(int n) { g_linesPerSlide = qMax(1, n); }
+int  getGlobalLinesPerSlide()      { return g_linesPerSlide; }
+
+// ── Slide distribution algorithm ──────────────────────────────
+// Rules:
+//  1. A blank line inside a section always starts a new slide.
+//     Consecutive blank lines are collapsed (no empty slides).
+//  2. Within each paragraph (text between blank lines), lines are
+//     chunked into groups of `lpp` (lines-per-slide).
+//  3. No slide ever starts or ends with a blank line.
 QList<QString> LyricsSection::slides() const
 {
-    QStringList lines = text.split('\n');
+    const int lpp = g_linesPerSlide;
+    const QStringList allLines = text.split('\n');
+
     QList<QString> result;
-    const int lpp = 4;
-    for (int i = 0; i < lines.size(); i += lpp) {
-        QStringList chunk;
-        for (int j = i; j < qMin(i + lpp, (int)lines.size()); ++j)
-            if (!lines[j].trimmed().isEmpty())
-                chunk << lines[j];
-        if (!chunk.isEmpty())
-            result << chunk.join('\n');
+    QStringList paragraph; // lines in the current paragraph
+
+    auto flushParagraph = [&]() {
+        if (paragraph.isEmpty()) return;
+        // Chunk paragraph into lpp-line slides
+        for (int i = 0; i < paragraph.size(); i += lpp) {
+            QStringList chunk;
+            for (int j = i; j < qMin(i + lpp, paragraph.size()); ++j)
+                chunk << paragraph[j];
+            if (!chunk.isEmpty())
+                result << chunk.join('\n');
+        }
+        paragraph.clear();
+    };
+
+    for (const QString &line : allLines) {
+        if (line.trimmed().isEmpty()) {
+            // Blank line → end current paragraph, start fresh
+            flushParagraph();
+        } else {
+            paragraph << line;
+        }
     }
+    flushParagraph(); // flush any trailing lines
+
     return result;
 }
 

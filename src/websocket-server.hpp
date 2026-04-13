@@ -16,6 +16,7 @@ class LyricsDock; // forward declare — avoids circular include
 struct WsClient {
     QTcpSocket *socket   = nullptr;
     bool        upgraded = false;
+    bool        authed   = false; // true when PIN verified (or no PIN set)
     QString     role;      // "manager" | "viewer" | "" (not set yet)
     QByteArray  rxBuf;
 };
@@ -42,6 +43,15 @@ public:
     void broadcastMediaState(const QString &filePath);
     void broadcastMediaList(const QStringList &paths);
     void broadcastSongs(const QJsonArray &songs);
+    void broadcastMvState(const QString &mode, const QString &path);
+    void broadcastMvVideoList(const QStringList &paths);
+    void broadcastMvMusicList(const QStringList &paths);
+    // Broadcasts the current slide being shown (for viewer confidence monitor)
+    void broadcastScripture(const QString &title, const QString &text);
+    // Broadcasts title+raw text so remote clients can rebuild their slide list
+    void broadcastScriptureState(const QString &title, const QString &text);
+    void setPin(const QString &pin) { m_pin = pin; }
+    QString pin() const { return m_pin; }
 
     struct ClientInfo { QString address; QString role; };
     QList<ClientInfo> connectedClients() const;
@@ -79,6 +89,15 @@ private:
     QString     m_lastMediaPath;
     QStringList m_lastMediaList;
     QJsonArray  m_lastSongsJson;
+    QString     m_pin;             // empty = no auth required
+    QString     m_lastMvMode;      // "video" | "music" | ""
+    QString     m_lastMvPath;
+    QStringList m_lastMvVideoList;
+    QStringList m_lastMvMusicList;
+    QString     m_lastScripTitle;    // currently displayed slide title
+    QString     m_lastScripText;     // currently displayed slide text
+    QString     m_lastScripFullTitle;// full title from Text panel
+    QString     m_lastScripFullText; // full raw text from Text panel
 };
 
 WebSocketServer  *lyricsWsServer();

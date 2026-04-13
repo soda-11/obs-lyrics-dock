@@ -317,18 +317,13 @@ void MediaCard::dropEvent(QDropEvent *e)
 // ══════════════════════════════════════════════════════════════
 
 
-// Broadcast current media list to all connected manager clients
-static void broadcastGalleryList(const QList<MediaItem> &items)
-{
-    auto *srv = lyricsWsServer();
-    if (!srv) return;
-    QStringList paths;
-    for (const auto &item : items)
-        paths << item.path;
-    srv->broadcastMediaList(paths);
-}
+// broadcastGalleryList is intentionally a no-op here.
+// LyricsDock owns the combined Lyrics+Scripture media list broadcast
+// via MediaGallery::mediaListChanged signals connected in buildUi().
+static void broadcastGalleryList(const QList<MediaItem> &) {}
 
-MediaGallery::MediaGallery(QWidget *parent):QWidget(parent)
+MediaGallery::MediaGallery(QWidget *parent, const QString &stateFileName)
+    : QWidget(parent), m_stateFileName(stateFileName)
 {
     // Initialise COM for Shell API (needed for IShellItemImageFactory)
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -349,10 +344,11 @@ void MediaGallery::buildUi()
     topL->setContentsMargins(6,4,6,4);
     auto *addBtn=new QPushButton("+ Add Media");
     addBtn->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
-    m_clearBtn=new QPushButton(QString::fromUtf8("\u25A0 Clear"));
+    m_clearBtn=new QPushButton(QString::fromUtf8("\u25A0 Stop"));
+    m_clearBtn->setFixedSize(68, 22);
     m_clearBtn->setStyleSheet(
         "QPushButton{background:#4a1a1a;color:#ff6b6b;"
-        "border:1px solid #8b2020;border-radius:3px;padding:2px 6px;}"
+        "border:1px solid #8b2020;border-radius:3px;padding:0 2px;}"
         "QPushButton:hover{background:#6a2020;}");
     topL->addWidget(addBtn);
     topL->addStretch();
@@ -388,6 +384,12 @@ void MediaGallery::buildUi()
     m_playPauseBtn->setFixedSize(26,22);
     m_scrubber=new QSlider(Qt::Horizontal);
     m_scrubber->setRange(0,1000);
+    m_scrubber->setStyleSheet(
+        "QSlider::groove:horizontal{background:#333;height:4px;border-radius:2px;}"
+        "QSlider::sub-page:horizontal{background:#4da6ff;border-radius:2px;}"
+        "QSlider::handle:horizontal{background:#4da6ff;width:12px;height:12px;"
+        "margin:-4px 0;border-radius:6px;}"
+        "QSlider::handle:horizontal:hover{background:#7dc4ff;}");
     m_timeLbl=new QLabel("0:00 / 0:00");
     m_timeLbl->setStyleSheet("color:#888;font-size:9px;");
     m_timeLbl->setFixedWidth(76);
@@ -430,15 +432,19 @@ void MediaGallery::buildUi()
             this,&MediaGallery::onClearMedia);
     connect(m_playPauseBtn,&QToolButton::clicked,
             this,&MediaGallery::onPlayPause);
-    connect(m_scrubber,&QSlider::sliderPressed,
-            this,[this](){ m_scrubbing=true; });
-    connect(m_scrubber,&QSlider::sliderReleased,
-            this,[this](){
-                m_scrubbing=false;
-                onScrubberMoved(m_scrubber->value());
-            });
-    connect(m_scrubber,&QSlider::valueChanged,
-            this,[this](int v){ if(m_scrubbing) onScrubberMoved(v); });
+    // OBS-style seek: seek immediately on user drag; timer respects isSliderDown()
+    connect(m_scrubber,&QSlider::sliderMoved,this,[this](int v){
+        int64_t t=0,d=0;
+        if(!lyrics_renderer_media_get_time(t,d)||d<=0) return;
+        int64_t seekMs=(int64_t)((double)v/1000.0*(double)d);
+        lyrics_renderer_media_set_time(seekMs);
+        m_seekCooldown=5;
+        auto fmt=[](int64_t ms)->QString{
+            int s=(int)(ms/1000);
+            return QString("%1:%2").arg(s/60).arg(s%60,2,10,QChar('0'));
+        };
+        m_timeLbl->setText(fmt(seekMs)+" / "+fmt(d));
+    });
 }
 
 int MediaGallery::fadeDurationMs() const
@@ -514,6 +520,7 @@ void MediaGallery::onAddMedia()
     rebuildGrid();
     saveState();
     broadcastGalleryList(m_items);
+    emit mediaListChanged();
 }
 
 void MediaGallery::onClearMedia()
@@ -522,6 +529,12 @@ void MediaGallery::onClearMedia()
     lyrics_renderer_media_clear();
     auto *srv = lyricsWsServer();
     if (srv) srv->broadcastMediaState(QString());
+    emit stopAllRequested(); // let LyricsDock stop MV tab UI
+}
+
+void MediaGallery::clearActiveCard()
+{
+    setActiveCard(-1); // UI only — no renderer call
 }
 
 void MediaGallery::onCardClicked(int index)
@@ -532,6 +545,15 @@ void MediaGallery::onCardClicked(int index)
     lyrics_renderer_media_push(path, fadeDurationMs());
     auto *srv = lyricsWsServer();
     if (srv) srv->broadcastMediaState(path);
+    emit mediaActivated(); // let LyricsDock stop MV tab
+}
+
+void MediaGallery::stopPlayback()
+{
+    setActiveCard(-1);
+    lyrics_renderer_media_clear();
+    auto *srv = lyricsWsServer();
+    if (srv) srv->broadcastMediaState(QString());
 }
 
 void MediaGallery::onCardRemoveRequested(int index)
@@ -549,6 +571,7 @@ void MediaGallery::onCardRemoveRequested(int index)
     rebuildGrid();
     saveState();
     broadcastGalleryList(m_items);
+    emit mediaListChanged();
 }
 
 void MediaGallery::reorderCards(int from,int to)
@@ -575,26 +598,31 @@ void MediaGallery::onPlayPause()
         : QString::fromUtf8("\u23F8"));
 }
 
-void MediaGallery::onScrubberMoved(int value)
-{
-    int64_t t=0,d=0;
-    if(!lyrics_renderer_media_get_time(t,d)) return;
-    if(d<=0) return;
-    lyrics_renderer_media_set_time(
-        (int64_t)((double)value/1000.0*(double)d));
-}
+// (seek bar now uses sliderMoved lambda in buildUi)
 
 void MediaGallery::onPollTimer()
 {
-    if(!m_videoControls->isVisible()||m_scrubbing) return;
-    int64_t t=0,d=0;
-    if(!lyrics_renderer_media_get_time(t,d)) return;
-    if(d>0) m_scrubber->setValue((int)((double)t/(double)d*1000.0));
-    auto fmt=[](int64_t ms)->QString{
-        int s=(int)(ms/1000);
-        return QString("%1:%2").arg(s/60).arg(s%60,2,10,QChar('0'));
-    };
-    m_timeLbl->setText(fmt(t)+" / "+fmt(d));
+    if(!m_videoControls->isVisible()) return;
+    // isSliderDown() is Qt's native drag-detection (OBS approach)
+    if(!m_scrubber->isSliderDown()){
+        int64_t t=0,d=0;
+        if(lyrics_renderer_media_get_time(t,d)&&d>0){
+            m_scrubber->setValue((int)((double)t/(double)d*1000.0));
+            auto fmt=[](int64_t ms)->QString{
+                int s=(int)(ms/1000);
+                return QString("%1:%2").arg(s/60).arg(s%60,2,10,QChar('0'));
+            };
+            m_timeLbl->setText(fmt(t)+" / "+fmt(d));
+        }
+    }
+    if(m_seekCooldown>0) --m_seekCooldown;
+}
+
+QStringList MediaGallery::itemPaths() const
+{
+    QStringList out;
+    for (const auto &item : m_items) out << item.path;
+    return out;
 }
 
 QString MediaGallery::galleryStatePath() const
@@ -603,7 +631,7 @@ QString MediaGallery::galleryStatePath() const
                     QStandardPaths::AppDataLocation)
                 +"/obs-lyrics-dock";
     QDir().mkpath(dir);
-    return dir+"/media-gallery.json";
+    return dir + "/" + m_stateFileName;
 }
 
 void MediaGallery::saveState()
@@ -636,4 +664,5 @@ void MediaGallery::loadState()
         m_fadeSpin->setValue(obj["fadeMs"].toInt());
     rebuildGrid();
     broadcastGalleryList(m_items);
+    emit mediaListChanged();
 }

@@ -1,11 +1,15 @@
 #pragma once
-// lyrics-dock.hpp  v9.5.1
+// lyrics-dock.hpp  v9.8.0
 
 #include "song-manager.hpp"
 #include "media-gallery.hpp"
 #include "websocket-server.hpp"
 #include "settings-dialog.hpp"
+#include "mv-tab.hpp"
+#include "scripture-tab.hpp"
+#include "color-preset-button.hpp"
 #include <QWidget>
+#include <QTabWidget>
 #include <QListWidget>
 #include <QScrollArea>
 #include <QGridLayout>
@@ -18,6 +22,9 @@
 #include <QSplitter>
 #include <QTextEdit>
 #include <QDialog>
+#include <QColor>
+#include <QMouseEvent>
+#include <QSpinBox>
 
 // ── Song Library popup ────────────────────────────────────────
 class SongLibraryPopup : public QDialog {
@@ -91,6 +98,8 @@ public:
                              int slideIndex,
                              const QString &lyrics,
                              const QString &section);
+    // Called by WebSocket server to update the Scripture tab from a remote client.
+    void applyScriptureFromRemote(const QString &title, const QString &text);
 
 private slots:
     void onAddToSequence();
@@ -107,6 +116,7 @@ private slots:
     void onZoomIn();
     void onZoomOut();
     void onZoomSlider(int value);
+    void onColorPresetApplied(QColor fontColor, QColor outlineColor);
 
 private:
     void buildUi();
@@ -133,14 +143,18 @@ private:
     QList<SlideButton*> m_slideButtons;
 
     QPushButton    *m_prevBtn, *m_nextBtn, *m_blackoutBtn;
+    ColorPresetButton *m_colorBtn[3] = {nullptr, nullptr, nullptr};
+    QSpinBox       *m_linesPerSlideSpin = nullptr;
     QLabel         *m_slideCounter;
     QToolButton    *m_zoomInBtn, *m_zoomOutBtn;
     QSlider        *m_zoomSlider;
     QLabel         *m_zoomLabel;
 
-    MediaGallery     *m_mediaGallery  = nullptr;
-    WebSocketServer  *m_wsServer      = nullptr;
+    MediaGallery     *m_mediaGallery   = nullptr;
+    WebSocketServer  *m_wsServer       = nullptr;
     SettingsDialog   *m_settingsDialog = nullptr;
+    MvTab            *m_mvTab          = nullptr;
+    ScriptureTab     *m_scriptureTab   = nullptr;
     Song   m_currentSong;
     int    m_activeSlide           = -1;
     int    m_currentSongSlideOffset = 0; // sum of slide counts of all songs before current

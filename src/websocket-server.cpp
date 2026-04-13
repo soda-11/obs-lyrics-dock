@@ -19,6 +19,8 @@
 #include <QJsonArray>
 #include <QNetworkInterface>
 #include <QFile>
+#include <QDir>
+#include <QStandardPaths>
 #include <QMetaObject>
 #include <QApplication>
 
@@ -236,6 +238,35 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
             (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toUtf8(),
             QCryptographicHash::Sha1).toBase64();
 
+        // ── Enforce max 2 WebSocket connections per IP ────────
+        QHostAddress peer = client->socket->peerAddress();
+        // Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 → 127.0.0.1)
+        if (peer.protocol() == QAbstractSocket::IPv6Protocol) {
+            bool ok = false;
+            QHostAddress v4(peer.toIPv4Address(&ok));
+            if (ok && !v4.isNull()) peer = v4;
+        }
+        int wsCount = 0;
+        for (auto *c : m_clients) {
+            if (!c->upgraded || c == client) continue;
+            QHostAddress cp = c->socket->peerAddress();
+            if (cp.protocol() == QAbstractSocket::IPv6Protocol) {
+                bool ok = false; QHostAddress v4(cp.toIPv4Address(&ok));
+                if (ok && !v4.isNull()) cp = v4;
+            }
+            if (cp == peer) wsCount++;
+        }
+        if (wsCount >= 2) {
+            blog(LOG_WARNING,
+                 "[lyrics-ws] Rejected WS from %s — max 2 per IP",
+                 peer.toString().toUtf8().constData());
+            client->socket->write(
+                "HTTP/1.1 429 Too Many Requests\r\n"
+                "Content-Length: 0\r\nConnection: close\r\n\r\n");
+            client->socket->disconnectFromHost();
+            return;
+        }
+
         QByteArray resp =
             "HTTP/1.1 101 Switching Protocols\r\n"
             "Upgrade: websocket\r\n"
@@ -245,6 +276,16 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
         client->socket->write(resp);
         client->upgraded = true;
         client->rxBuf.clear();
+
+        // Auto-authenticate when no PIN is required
+        if (m_pin.isEmpty()) client->authed = true;
+        else {
+            // Ask the client to provide the PIN
+            QJsonObject challenge;
+            challenge["type"]   = "auth";
+            challenge["result"] = "required";
+            sendJson(client, challenge);
+        }
 
         blog(LOG_INFO, "[lyrics-ws] WebSocket upgraded: %s",
              client->socket->peerAddress().toString().toUtf8().constData());
@@ -279,6 +320,33 @@ void WebSocketServer::handleWsFrame(WsClient *client,
     if (!doc.isObject()) return;
     QJsonObject msg = doc.object();
     QString type = msg["type"].toString();
+
+    // ── PIN authentication gate ───────────────────────────────
+    if (!client->authed) {
+        if (type == "auth") {
+            if (m_pin.isEmpty() || msg["pin"].toString() == m_pin) {
+                client->authed = true;
+                QJsonObject ok;
+                ok["type"]   = "auth";
+                ok["result"] = "ok";
+                sendJson(client, ok);
+                // Now prompt for role
+            } else {
+                QJsonObject deny;
+                deny["type"]   = "auth";
+                deny["result"] = "denied";
+                sendJson(client, deny);
+                client->socket->disconnectFromHost();
+            }
+        } else {
+            // Require auth first
+            QJsonObject req;
+            req["type"]   = "auth";
+            req["result"] = "required";
+            sendJson(client, req);
+        }
+        return;
+    }
 
     // Role selection — always allowed before and after role is set
     if (type == "setRole") {
@@ -329,6 +397,58 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                 sceneMsg["scenes"]       = sceneArr;
                 sceneMsg["currentScene"] = curName;
                 sendJson(client, sceneMsg);
+
+                // MV state
+                {
+                    QJsonObject mvMsg;
+                    mvMsg["type"] = "mvState";
+                    mvMsg["mode"] = m_lastMvMode;
+                    mvMsg["path"] = m_lastMvPath;
+                    sendJson(client, mvMsg);
+                }
+                // Scripture display state (for confidence monitor)
+                {
+                    QJsonObject scrMsg;
+                    scrMsg["type"]  = "scriptureUpdate";
+                    scrMsg["title"] = m_lastScripTitle;
+                    scrMsg["text"]  = m_lastScripText;
+                    sendJson(client, scrMsg);
+                }
+                // Scripture full state (for manager slide rebuild)
+                {
+                    QJsonObject scrState;
+                    scrState["type"]  = "scriptureState";
+                    scrState["title"] = m_lastScripFullTitle;
+                    scrState["text"]  = m_lastScripFullText;
+                    sendJson(client, scrState);
+                }
+                // MV lists — read fresh from disk so we always have the
+                // latest even if broadcastMvVideoList/MusicList was never called.
+                {
+                    auto readMvList = [](const QString &fname) -> QStringList {
+                        QString dir = QStandardPaths::writableLocation(
+                            QStandardPaths::AppDataLocation) + "/obs-lyrics-dock";
+                        QFile f(dir + "/" + fname);
+                        if (!f.open(QIODevice::ReadOnly)) return {};
+                        auto doc = QJsonDocument::fromJson(f.readAll());
+                        if (doc.isNull()) return {};
+                        QStringList out;
+                        for (const auto &v : doc.object()["items"].toArray())
+                            out << v.toString();
+                        return out;
+                    };
+                    m_lastMvVideoList = readMvList("mv-video.json");
+                    m_lastMvMusicList = readMvList("mv-music.json");
+
+                    QJsonArray va, ma;
+                    for (const auto &p : m_lastMvVideoList) va.append(p);
+                    for (const auto &p : m_lastMvMusicList) ma.append(p);
+                    QJsonObject mvLists;
+                    mvLists["type"]   = "mvLists";
+                    mvLists["videos"] = va;
+                    mvLists["music"]  = ma;
+                    sendJson(client, mvLists);
+                }
             }
 
             emit clientCountChanged(m_clients.size());
@@ -444,6 +564,78 @@ void WebSocketServer::handleCommand(WsClient *client,
         return;
     }
 
+    if (type == "getMvLists") {
+        QJsonObject resp;
+        resp["type"] = "mvLists";
+        QJsonArray va, ma;
+        for (const auto &p : m_lastMvVideoList) va.append(p);
+        for (const auto &p : m_lastMvMusicList) ma.append(p);
+        resp["videos"] = va;
+        resp["music"]  = ma;
+        sendJson(client, resp);
+        return;
+    }
+
+    if (type == "mvPlayVideo") {
+        QString path   = msg["path"].toString();
+        int     fadeMs = msg["fadeMs"].toInt(500);
+        QMetaObject::invokeMethod(qApp, [=]() {
+            lyrics_renderer_mv_video_push(path, fadeMs);
+            if (s_server) s_server->broadcastMvState("video", path);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    if (type == "mvPlayMusic") {
+        QString path = msg["path"].toString();
+        QMetaObject::invokeMethod(qApp, [=]() {
+            lyrics_renderer_mv_music_push(path);
+            if (s_server) s_server->broadcastMvState("music", path);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    if (type == "mvStop") {
+        QMetaObject::invokeMethod(qApp, [=]() {
+            lyrics_renderer_mv_clear(0);
+            if (s_server) s_server->broadcastMvState("", "");
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    // Remote manager pressed Apply — sends full title+text to OBS dock so it
+    // rebuilds its slide grid identically to what the remote shows.
+    if (type == "applyScripture") {
+        QString title = msg["title"].toString();
+        QString text  = msg["text"].toString();
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=]() {
+            if (dock) dock->applyScriptureFromRemote(title, text);
+            // Broadcast the full state so other connected remotes also update
+            if (s_server) s_server->broadcastScriptureState(title, text);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    // Remote manager clicked a slide — push that slide text to OBS
+    if (type == "pushScriptureSlide") {
+        QString title = msg["title"].toString();
+        QString text  = msg["text"].toString();
+        QMetaObject::invokeMethod(qApp, [=]() {
+            lyrics_renderer_scripture_push(title, text);
+            if (s_server) s_server->broadcastScripture(title, text);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    if (type == "clearScripture") {
+        QMetaObject::invokeMethod(qApp, [=]() {
+            lyrics_renderer_scripture_clear();
+            if (s_server) s_server->broadcastScripture(QString(), QString());
+        }, Qt::QueuedConnection);
+        return;
+    }
+
     if (type == "startStream")
         QMetaObject::invokeMethod(qApp,
             [](){ obs_frontend_streaming_start(); }, Qt::QueuedConnection);
@@ -489,6 +681,30 @@ void WebSocketServer::broadcastClear()
     broadcastJson(obj);
 }
 
+void WebSocketServer::broadcastScripture(const QString &title,
+                                          const QString &text)
+{
+    m_lastScripTitle = title;
+    m_lastScripText  = text;
+    QJsonObject obj;
+    obj["type"]  = "scriptureUpdate";
+    obj["title"] = title;
+    obj["text"]  = text;
+    broadcastJson(obj);
+}
+
+void WebSocketServer::broadcastScriptureState(const QString &title,
+                                               const QString &text)
+{
+    m_lastScripFullTitle = title;
+    m_lastScripFullText  = text;
+    QJsonObject obj;
+    obj["type"]  = "scriptureState";  // full title+raw text for slide rebuild
+    obj["title"] = title;
+    obj["text"]  = text;
+    broadcastJson(obj, true); // managers only
+}
+
 void WebSocketServer::broadcastScene(const QString &sceneName)
 {
     m_lastScene = sceneName;
@@ -525,6 +741,39 @@ void WebSocketServer::broadcastMediaList(const QStringList &paths)
     obj["type"]  = "mediaList";
     obj["items"] = arr;
     broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastMvState(const QString &mode, const QString &path)
+{
+    m_lastMvMode = mode;
+    m_lastMvPath = path;
+    QJsonObject obj;
+    obj["type"] = "mvState";
+    obj["mode"] = mode;
+    obj["path"] = path;
+    broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastMvVideoList(const QStringList &paths)
+{
+    m_lastMvVideoList = paths;
+    QJsonArray arr;
+    for (const auto &p : paths) arr.append(p);
+    QJsonObject obj;
+    obj["type"]   = "mvVideoList";
+    obj["videos"] = arr;
+    broadcastJson(obj, true);
+}
+
+void WebSocketServer::broadcastMvMusicList(const QStringList &paths)
+{
+    m_lastMvMusicList = paths;
+    QJsonArray arr;
+    for (const auto &p : paths) arr.append(p);
+    QJsonObject obj;
+    obj["type"]  = "mvMusicList";
+    obj["music"] = arr;
+    broadcastJson(obj, true);
 }
 
 // ── State snapshot for new joiner ────────────────────────────

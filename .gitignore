@@ -1,0 +1,9 @@
+# Build output
+build/
+
+# Installer binaries (large — distribute separately)
+installer/*.exe
+installer/*.zip
+
+# Claude Code session data
+.claude/

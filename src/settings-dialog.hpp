@@ -7,6 +7,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QTimer>
+#include <QLineEdit>
 
 class SettingsDialog : public QDialog {
     Q_OBJECT
@@ -33,5 +34,6 @@ private:
     QLabel      *m_qrLbl;
     QListWidget *m_clientList;
     QPushButton *m_applyBtn;
+    QLineEdit   *m_pinEdit;
     QTimer      *m_refreshTimer;
 };
