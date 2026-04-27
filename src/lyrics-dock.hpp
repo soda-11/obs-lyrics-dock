@@ -117,6 +117,7 @@ private slots:
     void onZoomOut();
     void onZoomSlider(int value);
     void onColorPresetApplied(QColor fontColor, QColor outlineColor);
+    void onSequenceContextMenu(const QPoint &pos);
 
 private:
     void buildUi();

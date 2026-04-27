@@ -595,6 +595,7 @@ void LyricsDock::buildUi()
     m_sequenceList->setStyleSheet(
         "QListWidget { background: #1e1e1e; }"
         "QListWidget::item:selected { background: #1e6bb8; }");
+    m_sequenceList->setContextMenuPolicy(Qt::CustomContextMenu);
 
     auto *seqBtns = new QHBoxLayout;
     m_removeFromSeqBtn = new QPushButton;
@@ -815,6 +816,8 @@ void LyricsDock::buildUi()
             this, &LyricsDock::onSequenceEditSong);
     connect(m_sequenceList, &QListWidget::currentRowChanged,
             this, &LyricsDock::onSequenceSongSelected);
+    connect(m_sequenceList, &QListWidget::customContextMenuRequested,
+            this, &LyricsDock::onSequenceContextMenu);
     connect(m_prevBtn,    &QPushButton::clicked,
             this, &LyricsDock::onPrevSlide);
     connect(m_nextBtn,    &QPushButton::clicked,
@@ -1002,8 +1005,17 @@ void LyricsDock::loadSongSlides(const Song &song)
             QString displaySection = sl.section;
             if (sl.isChinese)
                 displaySection = QString::fromUtf8("中  ") + sl.section;
+            // Card body: for Chinese slides show chars + translation (preferred)
+            // or chars + pinyin as fallback; for English slides show text as-is.
+            QString cardText = sl.text;
+            if (sl.isChinese) {
+                if (!sl.english.isEmpty())
+                    cardText = sl.text + "\n\n" + sl.english;
+                else if (!sl.pinyin.isEmpty())
+                    cardText = sl.text + "\n\n" + sl.pinyin;
+            }
             auto *btn = new SlideButton(
-                displaySection, sl.text, globalIdx, si, m_slideContainer);
+                displaySection, cardText, globalIdx, si, m_slideContainer);
             connect(btn, &SlideButton::clicked,
                     this, &LyricsDock::onSlideClicked);
             connect(btn, &SlideButton::editRequested,
@@ -1193,6 +1205,30 @@ void LyricsDock::onSequenceEditSong()
     }
     saveState();
     broadcastSequence(); // update browser's global slide indices
+}
+
+void LyricsDock::onSequenceContextMenu(const QPoint &pos)
+{
+    auto *item = m_sequenceList->itemAt(pos);
+    if (!item) return;
+
+    int row = m_sequenceList->row(item);
+    // Select the right-clicked row so actions act on the correct song
+    m_sequenceList->setCurrentRow(row);
+
+    QMenu menu(m_sequenceList);
+    auto *removeAct = menu.addAction(
+        style()->standardIcon(QStyle::SP_TrashIcon),
+        "Remove from Sequence");
+    auto *editAct = menu.addAction(
+        style()->standardIcon(QStyle::SP_FileDialogDetailedView),
+        "Edit Song");
+
+    auto *chosen = menu.exec(m_sequenceList->viewport()->mapToGlobal(pos));
+    if (chosen == removeAct)
+        onRemoveFromSequence();
+    else if (chosen == editAct)
+        onSequenceEditSong();
 }
 
 // ── Slide slots ───────────────────────────────────────────────

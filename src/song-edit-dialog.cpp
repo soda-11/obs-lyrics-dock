@@ -51,8 +51,14 @@ SongEditDialog::SongEditDialog(const Song &song, QWidget *parent,
     int row = (initialSectionIndex >= 0 &&
                initialSectionIndex < m_song.sections.size())
               ? initialSectionIndex : 0;
-    if (!m_song.sections.isEmpty())
+    if (!m_song.sections.isEmpty()) {
         m_sectionList->setCurrentRow(row);
+        // setCurrentRow() does NOT emit currentRowChanged when the list widget
+        // is already at that row (which happens when row==0 after populateSectionList
+        // left it at 0 with signals blocked). Force the load explicitly.
+        m_currentSection = row;
+        loadSectionIntoEditor(row);
+    }
     syncQuickPasteFromSections();
 }
 
@@ -77,7 +83,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *secLayout = new QHBoxLayout(secWidget);
 
     // ── LEFT: section list ────────────────────────────────────
-    auto *leftPanel  = new QWidget; leftPanel->setMaximumWidth(230);
+    auto *leftPanel  = new QWidget; leftPanel->setMaximumWidth(140);
     auto *leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0,0,0,0);
     auto *listHint = new QLabel("Sections  (drag to reorder)");
@@ -129,7 +135,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     rightLayout->setContentsMargins(0,0,0,0);
     rightLayout->setSpacing(4);
 
-    // Row 1: Type + Label + Chinese checkbox
+    // Row 1: Type + Label only
     auto *typeRow = new QHBoxLayout;
     m_sectionTypeCombo = new QComboBox;
     for (auto t : {SectionType::Verse, SectionType::Chorus,
@@ -140,32 +146,33 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     m_sectionLabelEdit = new QLineEdit;
     m_sectionLabelEdit->setPlaceholderText("e.g. Verse 1");
 
-    m_chineseCheck = new QCheckBox("Chinese Lyrics");
-    m_chineseCheck->setToolTip(
-        "Check this when the section lyrics are in Chinese.\n"
-        "Enables separate Pinyin and English translation blocks.");
-
     typeRow->addWidget(new QLabel("Type:"));
     typeRow->addWidget(m_sectionTypeCombo);
     typeRow->addSpacing(8);
     typeRow->addWidget(new QLabel("Label:"));
     typeRow->addWidget(m_sectionLabelEdit, 1);
-    typeRow->addSpacing(8);
-    typeRow->addWidget(m_chineseCheck);
 
-    // Row 2: Chinese options (Pinyin + Translation checkboxes) — hidden when not Chinese
+    // Row 2: Chinese Lyrics checkbox + Pinyin + Translation checkboxes on same row.
+    // Visible at all times; the Pinyin/Translation sub-checkboxes only appear when Chinese is on.
     m_chineseOptionsRow = new QWidget;
-    m_chineseOptionsRow->setVisible(false);
     auto *optRow = new QHBoxLayout(m_chineseOptionsRow);
     optRow->setContentsMargins(0,0,0,0);
-    m_pinyinCheck      = new QCheckBox("Show Pinyin (Block 2)");
-    m_translationCheck = new QCheckBox("Show English Translation (Block 3)");
+    m_chineseCheck = new QCheckBox("Chinese Lyrics");
+    m_chineseCheck->setToolTip(
+        "Check this when the section lyrics are in Chinese.\n"
+        "Enables separate Pinyin and English translation blocks.");
+    m_pinyinCheck      = new QCheckBox("Show Pinyin");
+    m_translationCheck = new QCheckBox("Show English Translation");
     m_pinyinCheck->setToolTip(
         "When enabled, pinyin is shown above the Chinese characters on the OBS slide.");
     m_translationCheck->setToolTip(
         "When enabled, the English translation is shown below the Chinese characters.");
-    optRow->addWidget(m_pinyinCheck);
+    m_pinyinCheck->setVisible(false);
+    m_translationCheck->setVisible(false);
+    optRow->addWidget(m_chineseCheck);
     optRow->addSpacing(16);
+    optRow->addWidget(m_pinyinCheck);
+    optRow->addSpacing(8);
     optRow->addWidget(m_translationCheck);
     optRow->addStretch();
 
@@ -219,9 +226,9 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     col3L->addWidget(m_englishEdit, 1);
     m_englishWidget->setVisible(false);
 
-    contentLayout->addWidget(col1,           3);
-    contentLayout->addWidget(m_pinyinWidget, 2);
-    contentLayout->addWidget(m_englishWidget,3);
+    contentLayout->addWidget(col1,           1);
+    contentLayout->addWidget(m_pinyinWidget, 1);
+    contentLayout->addWidget(m_englishWidget,1);
 
     rightLayout->addLayout(typeRow);
     rightLayout->addWidget(m_chineseOptionsRow);
@@ -425,7 +432,10 @@ void SongEditDialog::onSectionSelected(int row)
 
 void SongEditDialog::onChineseToggled(bool checked)
 {
-    m_chineseOptionsRow->setVisible(checked);
+    // Pinyin & Translation sub-checkboxes appear only in Chinese mode
+    m_pinyinCheck->setVisible(checked);
+    m_translationCheck->setVisible(checked);
+    // The two extra text blocks only show in Chinese mode
     m_pinyinWidget->setVisible(checked);
     m_englishWidget->setVisible(checked);
     m_col1Label->setText(checked ? "Chinese:" : "Lyrics:");
