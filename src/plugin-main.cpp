@@ -1,4 +1,4 @@
-// plugin-main.cpp  v9.8.1
+// plugin-main.cpp  v10.0.0
 #include "lyrics-dock.hpp"
 #include "song-manager.hpp"
 #include "lyrics-renderer.hpp"
@@ -23,7 +23,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("obs-lyrics-dock", "en-US")
 
 MODULE_EXPORT const char *obs_module_description()
 {
-    return "Lyrics Dock v9.8.1";
+    return "Lyrics Dock v10.0.0";
 }
 
 static LyricsDock      *s_dock     = nullptr;
@@ -67,7 +67,7 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
 
 MODULE_EXPORT bool obs_module_load()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Loading v9.8.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Loading v10.0.0");
 
     // Capture module data path while obs_current_module() is valid.
     // obs_get_module_data_path() can return a relative path (e.g.
@@ -142,13 +142,13 @@ MODULE_EXPORT bool obs_module_load()
 
     obs_frontend_add_dock_by_id("obs-lyrics-dock", "Lyrics", s_dock);
 
-    blog(LOG_INFO, "[obs-lyrics-dock] Registered v9.8.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Registered v10.0.0");
     return true;
 }
 
 MODULE_EXPORT void obs_module_unload()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Unloading v9.8.1");
+    blog(LOG_INFO, "[obs-lyrics-dock] Unloading v10.0.0");
 
     // s_dock is already nullptr — cleared in EXIT callback before Qt
     // destroyed the widget. Do NOT touch it here.

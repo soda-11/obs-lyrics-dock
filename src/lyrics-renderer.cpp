@@ -1,4 +1,4 @@
-// lyrics-renderer.cpp  v9.8.0
+// lyrics-renderer.cpp  v10.0
 //
 // Render order (bottom → top):
 //   1. Media layer  — image_source or ffmpeg_source (scaled to fit canvas)
@@ -41,6 +41,13 @@ static bool    s_mvMode      = false;
 // source so album-art frames never appear on the OBS canvas.
 static bool    s_mvMusicOnly = false;
 
+// Chinese mode: set when a Chinese (trilingual) slide is active.
+// In this mode srcLyrics carries Chinese characters, srcPinyin carries
+// pinyin (top), and srcEnglish carries the English translation (bottom).
+static bool    s_chineseMode = false;
+static QString s_pinyin;    // cached pinyin for re-apply on settings change
+static QString s_english;   // cached English translation
+
 // Scripture mode: set when Scripture tab is displaying content.
 // Lyrics and scripture text boxes are mutually cleared on push.
 static bool    s_scriptureMode = false;
@@ -53,6 +60,8 @@ static QString s_scripText;
 #define DEF_BOTTOM_BAR_H    80
 #define DEF_SCRIP_TITLE_H   70   // height of scripture title strip (px)
 #define DEF_SCRIP_H_MARGIN 100   // left/right horizontal margin (px)
+#define DEF_CH_PINYIN_H    130   // height of pinyin strip in Chinese mode (px)
+#define DEF_CH_CHINESE_H   290   // height of Chinese character strip (px)
 
 // ── File-type helpers ─────────────────────────────────────────
 static const QSet<QString> s_imageExts = {
@@ -75,10 +84,15 @@ struct LyricsInstance {
     // OBS built-in fade_transition source — handles crossfade between media
     obs_source_t *transitionSrc = nullptr;
 
-    // Lyrics text children
+    // Lyrics text children (English mode)
     obs_source_t *srcLyrics  = nullptr;
     obs_source_t *srcSection = nullptr;
     obs_source_t *srcTitle   = nullptr;
+
+    // Chinese mode: pinyin (top) and English translation (bottom).
+    // srcLyrics is re-used as the Chinese character source.
+    obs_source_t *srcPinyin  = nullptr;
+    obs_source_t *srcEnglish = nullptr;
 
     // Scripture text children
     obs_source_t *srcScripTitle = nullptr;
@@ -90,6 +104,14 @@ struct LyricsInstance {
     int bottomBarH   = DEF_BOTTOM_BAR_H;
     int scripTitleH  = DEF_SCRIP_TITLE_H;
     int scripHMargin = DEF_SCRIP_H_MARGIN;
+
+    // Chinese mode strip heights
+    int chPinyinH  = DEF_CH_PINYIN_H;
+    int chChineseH = DEF_CH_CHINESE_H;
+
+    // Per-instance Chinese mode flag (set alongside the text children update).
+    // Read by src_render() on the render thread without locking.
+    bool chineseMode = false;
 };
 
 static QList<LyricsInstance*> s_instances;
@@ -188,6 +210,33 @@ static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
                   textW, inst->scripTitleH);
     pushTextChild(inst->srcScripText,  s, "scr_text_",  text,
                   textW, inst->canvasH - inst->scripTitleH);
+}
+
+// ── Chinese slide child push ──────────────────────────────────
+// Updates srcPinyin (top), srcLyrics as Chinese chars (middle),
+// srcEnglish (bottom). Heights from inst->chPinyinH / chChineseH.
+static void updateChineseChildren(LyricsInstance *inst, obs_data_t *s,
+                                  const QString &pinyin,
+                                  const QString &chinese,
+                                  const QString &english)
+{
+    int mainH   = inst->canvasH - inst->bottomBarH;
+    int pinyinH  = inst->chPinyinH;
+    int chineseH = inst->chChineseH;
+    int englishH = qMax(0, mainH - pinyinH - chineseH);
+    pushTextChild(inst->srcPinyin, s, "ch_pinyin_",  pinyin,  inst->canvasW, pinyinH);
+    pushTextChild(inst->srcLyrics, s, "ch_chinese_", chinese, inst->canvasW, chineseH);
+    pushTextChild(inst->srcEnglish,s, "ch_english_", english, inst->canvasW, englishH);
+    inst->chineseMode = true;
+}
+
+// Clears both Chinese-mode extra sources (call when switching to English or clearing).
+static void clearChineseChildren(LyricsInstance *inst, obs_data_t *s)
+{
+    pushTextChild(inst->srcPinyin,  s, "ch_pinyin_",  QString(), inst->canvasW, inst->chPinyinH);
+    pushTextChild(inst->srcEnglish, s, "ch_english_", QString(), inst->canvasW, qMax(0,
+        inst->canvasH - inst->bottomBarH - inst->chPinyinH - inst->chChineseH));
+    inst->chineseMode = false;
 }
 
 // ── Audio capture callback ────────────────────────────────────
@@ -309,10 +358,14 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->bottomBarH =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin=(int)obs_data_get_int(settings,"scrip_h_margin");
+    inst->chPinyinH   =(int)obs_data_get_int(settings,"ch_pinyin_h");
+    inst->chChineseH  =(int)obs_data_get_int(settings,"ch_chinese_h");
     if(!inst->canvasW)      inst->canvasW      =DEF_CANVAS_W;
     if(!inst->canvasH)      inst->canvasH      =DEF_CANVAS_H;
     if(!inst->bottomBarH)   inst->bottomBarH   =DEF_BOTTOM_BAR_H;
     if(!inst->scripTitleH)  inst->scripTitleH  =DEF_SCRIP_TITLE_H;
+    if(!inst->chPinyinH)    inst->chPinyinH    =DEF_CH_PINYIN_H;
+    if(!inst->chChineseH)   inst->chChineseH   =DEF_CH_CHINESE_H;
     // margin may legitimately be 0 — only default if key not found (returns 0
     // from obs_data_get_int when key is absent AND default is not set yet, so
     // we check against a sentinel stored in defaults instead)
@@ -331,6 +384,8 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->srcLyrics     = makeGdi("lyrics_main");
     inst->srcSection    = makeGdi("lyrics_section");
     inst->srcTitle      = makeGdi("lyrics_title");
+    inst->srcPinyin     = makeGdi("ch_pinyin");
+    inst->srcEnglish    = makeGdi("ch_english");
     inst->srcScripTitle = makeGdi("scripture_title");
     inst->srcScripText  = makeGdi("scripture_text");
 
@@ -374,6 +429,8 @@ static void src_destroy(void *data)
     obs_source_release(inst->srcLyrics);
     obs_source_release(inst->srcSection);
     obs_source_release(inst->srcTitle);
+    obs_source_release(inst->srcPinyin);
+    obs_source_release(inst->srcEnglish);
     obs_source_release(inst->srcScripTitle);
     obs_source_release(inst->srcScripText);
     delete inst;
@@ -386,6 +443,8 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"bottom_bar_h",  DEF_BOTTOM_BAR_H);
     obs_data_set_default_int(s,"scrip_title_h",  DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
+    obs_data_set_default_int(s,"ch_pinyin_h",    DEF_CH_PINYIN_H);
+    obs_data_set_default_int(s,"ch_chinese_h",   DEF_CH_CHINESE_H);
 
     uint32_t white=0x00FFFFFFu,black=0x00000000u;
     uint32_t lgrey=0x00CCCCCCu,mgrey=0x00AAAAAAu;
@@ -407,13 +466,17 @@ static void src_defaults(obs_data_t *s)
         obs_data_set_default_int   (s,pk(p,"align").c_str(),ha);
         obs_data_set_default_int   (s,pk(p,"valign").c_str(),va);
     };
-    // Lyrics boxes
+    // English lyrics boxes
     setBox("lyrics_", 48,1,1,white);
     setBox("section_",22,0,1,lgrey);
     setBox("title_",  22,2,1,mgrey);
     // Scripture boxes: title centred+top, text centred+middle
     setBox("scr_title_",32,1,0,ygold);
     setBox("scr_text_", 48,1,1,white);
+    // Chinese trilingual boxes (pinyin top, Chinese chars middle, English bottom)
+    setBox("ch_pinyin_",  24,1,1,ygold);   // pinyin: smaller, gold-yellow
+    setBox("ch_chinese_", 52,1,1,white);   // Chinese: large, white
+    setBox("ch_english_", 28,1,1,lgrey);   // English: medium, light grey
     (void)ygold; // suppress unused warning if needed
 }
 
@@ -500,24 +563,35 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"bottom_bar_h", "Lyrics: bottom bar height (px)",10,400,1);
     obs_properties_add_int(cgrp,"scrip_title_h",  "Scripture: title strip height (px)",10,400,1);
     obs_properties_add_int(cgrp,"scrip_h_margin", "Scripture: left/right margin (px)",  0,400,1);
+    obs_properties_add_int(cgrp,"ch_pinyin_h",  "Chinese: pinyin strip height (px)",  10,300,1);
+    obs_properties_add_int(cgrp,"ch_chinese_h", "Chinese: character strip height (px)",10,400,1);
     obs_properties_add_text(cgrp,"_info",
         "Render order (bottom to top):\n"
         "  1. Media layer  (background images/videos)\n"
-        "  Lyrics mode:\n"
-        "    2. Lyrics text  (full canvas)\n"
+        "  English lyrics mode:\n"
+        "    2. Lyrics text  (full canvas minus bottom bar)\n"
         "    3. Section label (bottom-left)\n"
         "    4. Song title   (bottom-right)\n"
+        "  Chinese trilingual mode:\n"
+        "    2. Pinyin (top strip)\n"
+        "    3. Chinese characters (middle strip)\n"
+        "    4. English translation (lower strip)\n"
+        "    5. Section label (bottom-left)\n"
+        "    6. Song title   (bottom-right)\n"
         "  Scripture mode:\n"
         "    2. Scripture title (top strip)\n"
         "    3. Scripture text  (main area below title)",
         OBS_TEXT_INFO);
     obs_properties_add_group(props,"canvas_grp",
         "Canvas & Layout",OBS_GROUP_NORMAL,cgrp);
-    addBoxGroup(props,"lyrics_", "1.  Lyrics — Main Text");
+    addBoxGroup(props,"lyrics_", "1.  English Lyrics — Main Text");
     addBoxGroup(props,"section_","2.  Lyrics — Section Label  (bottom-left)");
     addBoxGroup(props,"title_",  "3.  Lyrics — Song Title  (bottom-right)");
     addBoxGroup(props,"scr_title_","4.  Scripture — Title  (top strip)");
     addBoxGroup(props,"scr_text_", "5.  Scripture — Text  (main area)");
+    addBoxGroup(props,"ch_pinyin_", "6.  Chinese — Pinyin  (top strip)");
+    addBoxGroup(props,"ch_chinese_","7.  Chinese — Characters  (middle)");
+    addBoxGroup(props,"ch_english_","8.  Chinese — English Translation  (bottom)");
     return props;
 }
 
@@ -529,20 +603,32 @@ static void src_update(void *data, obs_data_t *settings)
     inst->bottomBarH  =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH  =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin =(int)obs_data_get_int(settings,"scrip_h_margin");
+    inst->chPinyinH    =(int)obs_data_get_int(settings,"ch_pinyin_h");
+    inst->chChineseH   =(int)obs_data_get_int(settings,"ch_chinese_h");
     if(!inst->canvasW)      inst->canvasW      =DEF_CANVAS_W;
     if(!inst->canvasH)      inst->canvasH      =DEF_CANVAS_H;
     if(!inst->bottomBarH)   inst->bottomBarH   =DEF_BOTTOM_BAR_H;
     if(!inst->scripTitleH)  inst->scripTitleH  =DEF_SCRIP_TITLE_H;
+    if(!inst->chPinyinH)    inst->chPinyinH    =DEF_CH_PINYIN_H;
+    if(!inst->chChineseH)   inst->chChineseH   =DEF_CH_CHINESE_H;
     if(!obs_data_has_user_value(settings,"scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
     QMutexLocker lk(&s_mu);
     // Re-apply whichever mode is currently active so text re-layouts
     // correctly after a canvas size / font change.
     if (s_scriptureMode) {
+        clearChineseChildren(inst, settings);
         updateTextChildren(inst,settings,QString(),QString(),QString());
         updateScriptureChildren(inst,settings,s_scripTitle,s_scripText);
+    } else if (s_chineseMode) {
+        updateScriptureChildren(inst,settings,QString(),QString());
+        updateChineseChildren(inst,settings,s_pinyin,s_lyrics,s_english);
+        int halfW=inst->canvasW/2, barH=inst->bottomBarH;
+        pushTextChild(inst->srcSection,settings,"section_",s_section,halfW,barH);
+        pushTextChild(inst->srcTitle,  settings,"title_",  s_title,  halfW,barH);
     } else {
         updateScriptureChildren(inst,settings,QString(),QString());
+        clearChineseChildren(inst, settings);
         updateTextChildren(inst,settings,s_lyrics,s_section,s_title);
     }
 }
@@ -581,12 +667,35 @@ static void src_render(void *data, gs_effect_t *effect)
     obs_source_video_render(inst->srcScripText);
     gs_matrix_pop();
 
-    // ── 4. Lyrics text — full canvas ─────────────────────────
-    // Empty when in scripture mode; non-empty only when Lyrics tab is active.
-    gs_matrix_push();
-    gs_matrix_translate3f(0.f,0.f,0.f);
-    obs_source_video_render(inst->srcLyrics);
-    gs_matrix_pop();
+    if (inst->chineseMode) {
+        // ── Chinese trilingual layout ─────────────────────────
+        // Pinyin (top) → Chinese characters (middle) → English (bottom)
+        int pinyinH  = inst->chPinyinH;
+        int chineseH = inst->chChineseH;
+        int englishY = pinyinH + chineseH;
+
+        gs_matrix_push();
+        gs_matrix_translate3f(0.f, 0.f, 0.f);
+        obs_source_video_render(inst->srcPinyin);
+        gs_matrix_pop();
+
+        gs_matrix_push();
+        gs_matrix_translate3f(0.f, (float)pinyinH, 0.f);
+        obs_source_video_render(inst->srcLyrics);
+        gs_matrix_pop();
+
+        gs_matrix_push();
+        gs_matrix_translate3f(0.f, (float)englishY, 0.f);
+        obs_source_video_render(inst->srcEnglish);
+        gs_matrix_pop();
+    } else {
+        // ── 4. Lyrics text — full canvas (English mode) ───────
+        // Empty when in scripture mode; non-empty only when Lyrics tab is active.
+        gs_matrix_push();
+        gs_matrix_translate3f(0.f, 0.f, 0.f);
+        obs_source_video_render(inst->srcLyrics);
+        gs_matrix_pop();
+    }
 
     // ── 5. Section label — bottom-left ───────────────────────
     gs_matrix_push();
@@ -664,10 +773,13 @@ void lyrics_renderer_push(const QString &lyrics,
     QMutexLocker lk(&s_mu);
     s_scriptureMode=false;
     s_scripTitle.clear(); s_scripText.clear();
+    s_chineseMode=false;
+    s_pinyin.clear(); s_english.clear();
     s_lyrics=lyrics; s_section=section; s_title=title;
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
         updateScriptureChildren(inst,s,QString(),QString()); // clear scripture
+        clearChineseChildren(inst,s);                        // clear Chinese layers
         updateTextChildren(inst,s,s_lyrics,s_section,s_title);
         obs_data_release(s);
     }
@@ -678,11 +790,40 @@ void lyrics_renderer_clear()
     QMutexLocker lk(&s_mu);
     s_scriptureMode=false;
     s_scripTitle.clear(); s_scripText.clear();
+    s_chineseMode=false;
+    s_pinyin.clear(); s_english.clear();
     s_lyrics.clear(); s_section.clear(); s_title.clear();
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
         updateScriptureChildren(inst,s,QString(),QString());
+        clearChineseChildren(inst,s);
         updateTextChildren(inst,s,QString(),QString(),QString());
+        obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_push_chinese(const QString &chinese,
+                                  const QString &pinyin,
+                                  const QString &english,
+                                  const QString &section,
+                                  const QString &title)
+{
+    QMutexLocker lk(&s_mu);
+    s_scriptureMode=false;
+    s_scripTitle.clear(); s_scripText.clear();
+    s_chineseMode=true;
+    s_lyrics =chinese; // srcLyrics is re-used for Chinese characters
+    s_pinyin =pinyin;
+    s_english=english;
+    s_section=section;
+    s_title  =title;
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        updateScriptureChildren(inst,s,QString(),QString());
+        updateChineseChildren(inst,s,pinyin,chinese,english);
+        int halfW=inst->canvasW/2, barH=inst->bottomBarH;
+        pushTextChild(inst->srcSection,s,"section_",section,halfW,barH);
+        pushTextChild(inst->srcTitle,  s,"title_",  title,  halfW,barH);
         obs_data_release(s);
     }
 }
@@ -909,9 +1050,11 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
     s_scripTitle    = title;
     s_scripText     = text;
     // Clear lyrics so both don't show simultaneously
+    s_chineseMode=false; s_pinyin.clear(); s_english.clear();
     s_lyrics.clear(); s_section.clear(); s_title.clear();
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
+        clearChineseChildren(inst,s);
         updateTextChildren(inst,s,QString(),QString(),QString()); // clear lyrics
         updateScriptureChildren(inst,s,title,text);
         obs_data_release(s);

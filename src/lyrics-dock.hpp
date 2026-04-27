@@ -159,6 +159,6 @@ private:
     int    m_activeSlide           = -1;
     int    m_currentSongSlideOffset = 0; // sum of slide counts of all songs before current
     double m_slideScale  = 1.0;
-    QList<QPair<QString,QString>> m_slides;
-    QList<int>                    m_slideSectionIndices;
+    QList<LyricsSlide> m_slides;         // one entry per slide tile (English or Chinese)
+    QList<int>         m_slideSectionIndices;
 };

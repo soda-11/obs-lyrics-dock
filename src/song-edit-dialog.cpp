@@ -1,4 +1,6 @@
-// song-edit-dialog.cpp  v9.8.0
+// song-edit-dialog.cpp  v10.0
+// Trilingual section editor: Block 1 = Chinese/English lyrics,
+// Block 2 = Pinyin (optional), Block 3 = English translation (optional).
 #include "song-edit-dialog.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -11,6 +13,7 @@
 #include <QUuid>
 #include <QStyle>
 #include <QDropEvent>
+#include <QSplitter>
 
 // ── SectionListWidget ────────────────────────────────────────
 
@@ -56,7 +59,7 @@ SongEditDialog::SongEditDialog(const Song &song, QWidget *parent,
 void SongEditDialog::buildUi(int initialSectionIndex)
 {
     setWindowTitle("Edit Song");
-    setMinimumSize(820, 560);
+    setMinimumSize(920, 580);
 
     // Song Info
     auto *metaGroup = new QGroupBox("Song Info");
@@ -73,6 +76,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *secWidget = new QWidget;
     auto *secLayout = new QHBoxLayout(secWidget);
 
+    // ── LEFT: section list ────────────────────────────────────
     auto *leftPanel  = new QWidget; leftPanel->setMaximumWidth(230);
     auto *leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0,0,0,0);
@@ -119,10 +123,13 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     leftLayout->addWidget(m_sectionList, 1);
     leftLayout->addLayout(btnRow);
 
+    // ── RIGHT: editor panel ───────────────────────────────────
     auto *rightPanel  = new QWidget;
     auto *rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(0,0,0,0);
+    rightLayout->setSpacing(4);
 
+    // Row 1: Type + Label + Chinese checkbox
     auto *typeRow = new QHBoxLayout;
     m_sectionTypeCombo = new QComboBox;
     for (auto t : {SectionType::Verse, SectionType::Chorus,
@@ -132,19 +139,93 @@ void SongEditDialog::buildUi(int initialSectionIndex)
         m_sectionTypeCombo->addItem(sectionTypeLabel(t), static_cast<int>(t));
     m_sectionLabelEdit = new QLineEdit;
     m_sectionLabelEdit->setPlaceholderText("e.g. Verse 1");
+
+    m_chineseCheck = new QCheckBox("Chinese Lyrics");
+    m_chineseCheck->setToolTip(
+        "Check this when the section lyrics are in Chinese.\n"
+        "Enables separate Pinyin and English translation blocks.");
+
     typeRow->addWidget(new QLabel("Type:"));
     typeRow->addWidget(m_sectionTypeCombo);
     typeRow->addSpacing(8);
     typeRow->addWidget(new QLabel("Label:"));
     typeRow->addWidget(m_sectionLabelEdit, 1);
+    typeRow->addSpacing(8);
+    typeRow->addWidget(m_chineseCheck);
 
+    // Row 2: Chinese options (Pinyin + Translation checkboxes) — hidden when not Chinese
+    m_chineseOptionsRow = new QWidget;
+    m_chineseOptionsRow->setVisible(false);
+    auto *optRow = new QHBoxLayout(m_chineseOptionsRow);
+    optRow->setContentsMargins(0,0,0,0);
+    m_pinyinCheck      = new QCheckBox("Show Pinyin (Block 2)");
+    m_translationCheck = new QCheckBox("Show English Translation (Block 3)");
+    m_pinyinCheck->setToolTip(
+        "When enabled, pinyin is shown above the Chinese characters on the OBS slide.");
+    m_translationCheck->setToolTip(
+        "When enabled, the English translation is shown below the Chinese characters.");
+    optRow->addWidget(m_pinyinCheck);
+    optRow->addSpacing(16);
+    optRow->addWidget(m_translationCheck);
+    optRow->addStretch();
+
+    // Row 3: Content area — 1 or 3 columns depending on Chinese mode
+    auto *contentArea   = new QWidget;
+    auto *contentLayout = new QHBoxLayout(contentArea);
+    contentLayout->setContentsMargins(0,0,0,0);
+    contentLayout->setSpacing(6);
+
+    // Block 1: Main lyrics / Chinese text
+    auto *col1   = new QWidget;
+    auto *col1L  = new QVBoxLayout(col1);
+    col1L->setContentsMargins(0,0,0,0);
+    m_col1Label = new QLabel("Lyrics:");
+    m_col1Label->setStyleSheet("font-size:9px;color:#aaa;");
     m_sectionTextEdit = new QTextEdit;
-    m_sectionTextEdit->setPlaceholderText("Enter lyrics for this section...");
+    m_sectionTextEdit->setPlaceholderText(
+        "Enter lyrics for this section...\n\n"
+        "Blank line = slide boundary.");
     m_sectionTextEdit->setFontFamily("Courier New");
+    col1L->addWidget(m_col1Label);
+    col1L->addWidget(m_sectionTextEdit, 1);
+
+    // Block 2: Pinyin (hidden when not Chinese)
+    m_pinyinWidget  = new QWidget;
+    auto *col2L     = new QVBoxLayout(m_pinyinWidget);
+    col2L->setContentsMargins(0,0,0,0);
+    auto *pinyinLbl = new QLabel("Pinyin:");
+    pinyinLbl->setStyleSheet("font-size:9px;color:#aaa;");
+    auto *pinyinHint = new QLabel("1 pinyin line per Chinese line.\nBlank line = slide boundary.");
+    pinyinHint->setStyleSheet("font-size:8px;color:#666;");
+    m_pinyinEdit = new QTextEdit;
+    m_pinyinEdit->setFontFamily("Courier New");
+    col2L->addWidget(pinyinLbl);
+    col2L->addWidget(pinyinHint);
+    col2L->addWidget(m_pinyinEdit, 1);
+    m_pinyinWidget->setVisible(false);
+
+    // Block 3: English translation (hidden when not Chinese)
+    m_englishWidget  = new QWidget;
+    auto *col3L      = new QVBoxLayout(m_englishWidget);
+    col3L->setContentsMargins(0,0,0,0);
+    auto *englishLbl = new QLabel("English Translation:");
+    englishLbl->setStyleSheet("font-size:9px;color:#aaa;");
+    auto *englishHint = new QLabel("May have more lines than Chinese.\nBlank line = slide boundary.");
+    englishHint->setStyleSheet("font-size:8px;color:#666;");
+    m_englishEdit = new QTextEdit;
+    m_englishEdit->setFontFamily("Courier New");
+    col3L->addWidget(englishLbl);
+    col3L->addWidget(englishHint);
+    col3L->addWidget(m_englishEdit, 1);
+    m_englishWidget->setVisible(false);
+
+    contentLayout->addWidget(col1,           3);
+    contentLayout->addWidget(m_pinyinWidget, 2);
+    contentLayout->addWidget(m_englishWidget,3);
 
     rightLayout->addLayout(typeRow);
-    rightLayout->addWidget(new QLabel("Lyrics:"));
-    rightLayout->addWidget(m_sectionTextEdit);
+    rightLayout->addWidget(m_chineseOptionsRow);
+    rightLayout->addWidget(contentArea, 1);
 
     secLayout->addWidget(leftPanel);
     secLayout->addSpacing(8);
@@ -206,6 +287,8 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     connect(m_sectionTypeCombo,
             QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SongEditDialog::onSectionTypeChanged);
+    connect(m_chineseCheck, &QCheckBox::toggled,
+            this, &SongEditDialog::onChineseToggled);
     connect(m_quickPasteBtn, &QPushButton::clicked,
             this, &SongEditDialog::onQuickPasteClicked);
     connect(cancelBtn,  &QPushButton::clicked, this, &QDialog::reject);
@@ -221,7 +304,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
 
 void SongEditDialog::syncQuickPasteFromSections()
 {
-    // Build [Label]\ntext representation of current sections
+    // Build [Label]\ntext representation of current sections (English text only)
     QString out;
     for (const auto &sec : m_song.sections) {
         QString lbl = sec.label.isEmpty()
@@ -255,8 +338,9 @@ void SongEditDialog::populateSectionList()
     m_sectionList->clear();
     for (int i = 0; i < m_song.sections.size(); ++i) {
         const auto &sec = m_song.sections[i];
-        auto *item = new QListWidgetItem(
-            sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label);
+        QString label = sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label;
+        if (sec.isChinese) label = QString::fromUtf8("中 ") + label;
+        auto *item = new QListWidgetItem(label);
         item->setData(Qt::UserRole, i);
         m_sectionList->addItem(item);
     }
@@ -269,17 +353,41 @@ void SongEditDialog::loadSectionIntoEditor(int idx)
     if (idx < 0 || idx >= m_song.sections.size()) {
         m_sectionTextEdit->clear();
         m_sectionLabelEdit->clear();
+        m_pinyinEdit->clear();
+        m_englishEdit->clear();
+        m_chineseCheck->blockSignals(true);
+        m_chineseCheck->setChecked(false);
+        m_chineseCheck->blockSignals(false);
+        onChineseToggled(false);
         return;
     }
     const auto &sec = m_song.sections[idx];
     m_sectionTypeCombo->blockSignals(true);
     m_sectionTextEdit->blockSignals(true);
+    m_pinyinEdit->blockSignals(true);
+    m_englishEdit->blockSignals(true);
+    m_chineseCheck->blockSignals(true);
+
     m_sectionTypeCombo->setCurrentIndex(
         m_sectionTypeCombo->findData(static_cast<int>(sec.type)));
     m_sectionLabelEdit->setText(sec.label);
     m_sectionTextEdit->setPlainText(sec.text);
+    m_pinyinEdit->setPlainText(sec.pinyin);
+    m_englishEdit->setPlainText(sec.english);
+
+    // Load Chinese flags
+    m_chineseCheck->setChecked(sec.isChinese);
+    m_pinyinCheck->setChecked(sec.showPinyin);
+    m_translationCheck->setChecked(sec.showTranslation);
+
     m_sectionTypeCombo->blockSignals(false);
     m_sectionTextEdit->blockSignals(false);
+    m_pinyinEdit->blockSignals(false);
+    m_englishEdit->blockSignals(false);
+    m_chineseCheck->blockSignals(false);
+
+    // Show/hide Chinese extra blocks
+    onChineseToggled(sec.isChinese);
 }
 
 void SongEditDialog::saveCurrentSection()
@@ -287,13 +395,23 @@ void SongEditDialog::saveCurrentSection()
     if (m_currentSection < 0 ||
         m_currentSection >= m_song.sections.size()) return;
     auto &sec = m_song.sections[m_currentSection];
-    sec.type  = static_cast<SectionType>(
+    sec.type            = static_cast<SectionType>(
         m_sectionTypeCombo->currentData().toInt());
-    sec.label = m_sectionLabelEdit->text();
-    sec.text  = m_sectionTextEdit->toPlainText();
-    if (auto *item = m_sectionList->item(m_currentSection))
-        item->setText(sec.label.isEmpty()
-                      ? sectionTypeLabel(sec.type) : sec.label);
+    sec.label           = m_sectionLabelEdit->text();
+    sec.text            = m_sectionTextEdit->toPlainText();
+    sec.isChinese       = m_chineseCheck->isChecked();
+    sec.showPinyin      = m_pinyinCheck->isChecked();
+    sec.showTranslation = m_translationCheck->isChecked();
+    sec.pinyin          = m_pinyinEdit->toPlainText();
+    sec.english         = m_englishEdit->toPlainText();
+
+    // Update list item text
+    if (auto *item = m_sectionList->item(m_currentSection)) {
+        QString label = sec.label.isEmpty()
+                        ? sectionTypeLabel(sec.type) : sec.label;
+        if (sec.isChinese) label = QString::fromUtf8("中 ") + label;
+        item->setText(label);
+    }
 }
 
 // ── Slots ─────────────────────────────────────────────────────
@@ -305,6 +423,21 @@ void SongEditDialog::onSectionSelected(int row)
     loadSectionIntoEditor(row);
 }
 
+void SongEditDialog::onChineseToggled(bool checked)
+{
+    m_chineseOptionsRow->setVisible(checked);
+    m_pinyinWidget->setVisible(checked);
+    m_englishWidget->setVisible(checked);
+    m_col1Label->setText(checked ? "Chinese:" : "Lyrics:");
+    m_sectionTextEdit->setPlaceholderText(
+        checked
+            ? "Enter Chinese characters here...\n\n"
+              "Blank line = slide boundary.\n"
+              "Same blank line structure as Pinyin block."
+            : "Enter lyrics for this section...\n\n"
+              "Blank line = slide boundary.");
+}
+
 void SongEditDialog::onSectionOrderChanged()
 {
     // Save editor content into the DATA for the current section.
@@ -314,10 +447,15 @@ void SongEditDialog::onSectionOrderChanged()
     // so that write corrupts the wrong item's label.
     if (m_currentSection >= 0 && m_currentSection < m_song.sections.size()) {
         auto &sec = m_song.sections[m_currentSection];
-        sec.type  = static_cast<SectionType>(
+        sec.type            = static_cast<SectionType>(
             m_sectionTypeCombo->currentData().toInt());
-        sec.label = m_sectionLabelEdit->text();
-        sec.text  = m_sectionTextEdit->toPlainText();
+        sec.label           = m_sectionLabelEdit->text();
+        sec.text            = m_sectionTextEdit->toPlainText();
+        sec.isChinese       = m_chineseCheck->isChecked();
+        sec.showPinyin      = m_pinyinCheck->isChecked();
+        sec.showTranslation = m_translationCheck->isChecked();
+        sec.pinyin          = m_pinyinEdit->toPlainText();
+        sec.english         = m_englishEdit->toPlainText();
     }
     // Rebuild sections array in the new visual order using UserRole indices.
     QList<LyricsSection> reordered;
@@ -331,8 +469,9 @@ void SongEditDialog::onSectionOrderChanged()
     for (int i = 0; i < m_sectionList->count(); ++i) {
         m_sectionList->item(i)->setData(Qt::UserRole, i);
         const auto &sec = m_song.sections[i];
-        m_sectionList->item(i)->setText(
-            sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label);
+        QString label = sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label;
+        if (sec.isChinese) label = QString::fromUtf8("中 ") + label;
+        m_sectionList->item(i)->setText(label);
     }
     m_currentSection = m_sectionList->currentRow();
     loadSectionIntoEditor(m_currentSection);

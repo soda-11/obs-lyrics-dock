@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs-lyrics-dock VERSION 9.8.1)
+project(obs-lyrics-dock VERSION 10.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -53,4 +53,4 @@ if(WIN32)
         DESTINATION "data/obs-plugins/obs-lyrics-dock")
 endif()
 
-message(STATUS "obs-lyrics-dock v9.8.1 configured")
+message(STATUS "obs-lyrics-dock v10.0.0 configured")

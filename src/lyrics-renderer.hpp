@@ -1,5 +1,5 @@
 #pragma once
-// lyrics-renderer.hpp  v9.8.0
+// lyrics-renderer.hpp  v10.0
 
 #include <obs-module.h>
 #include <QString>
@@ -7,9 +7,17 @@
 void lyrics_renderer_register();
 
 // ── Lyrics API ────────────────────────────────────────────────
+// English mode: push a single lyrics text block
 void lyrics_renderer_push(const QString &lyrics,
                           const QString &sectionLabel,
                           const QString &songTitle);
+// Chinese mode: pinyin on top, Chinese characters in middle, English translation bottom.
+// Pass empty strings for layers that are disabled / not present.
+void lyrics_renderer_push_chinese(const QString &chinese,
+                                  const QString &pinyin,
+                                  const QString &english,
+                                  const QString &sectionLabel,
+                                  const QString &songTitle);
 void lyrics_renderer_clear();
 
 // ── Lyrics-tab Media API ───────────────────────────────────────

@@ -1,4 +1,4 @@
-// lyrics-dock.cpp  v9.8.0
+// lyrics-dock.cpp  v10.0
 #include "lyrics-dock.hpp"
 #include "song-edit-dialog.hpp"
 #include "media-gallery.hpp"
@@ -395,16 +395,17 @@ QJsonArray LyricsDock::buildSequenceJson() const
         s["title"]  = song->title;
         s["artist"] = song->artist;
         QJsonArray slides;
-        for (const auto &sec : song->sections) {
-            QString lbl = sec.label.isEmpty()
-                          ? sectionTypeLabel(sec.type) : sec.label;
-            for (const auto &slideText : sec.slides()) {
-                QJsonObject sl;
-                sl["label"]      = lbl;
-                sl["text"]       = slideText;
-                sl["slideIndex"] = globalIdx++;
-                slides.append(sl);
+        for (const auto &sl : song->allSlides()) {
+            QJsonObject slObj;
+            slObj["label"]      = sl.section;
+            slObj["text"]       = sl.text;
+            slObj["slideIndex"] = globalIdx++;
+            if (sl.isChinese) {
+                slObj["isChinese"] = true;
+                slObj["pinyin"]    = sl.pinyin;
+                slObj["english"]   = sl.english;
             }
+            slides.append(slObj);
         }
         s["slides"] = slides;
         songs.append(s);
@@ -548,7 +549,7 @@ void LyricsDock::buildUi()
     auto *titleLbl = new QLabel("OBS Lyrics Dock");
     titleLbl->setStyleSheet(
         "color: #ccc; font-weight: bold; font-size: 11px;");
-    auto *verLbl = new QLabel("v9.8.0");
+    auto *verLbl = new QLabel("v10.0");
     verLbl->setStyleSheet(
         "color: #ff4444; font-size: 9px; font-weight: bold;");
     auto *settingsBtn = new QToolButton;
@@ -921,8 +922,7 @@ int LyricsDock::computeGlobalSlideOffset(int forRow) const
         if (r >= m_sequenceSongIds.size()) break;
         auto *s = SongManager::instance().findById(m_sequenceSongIds[r]);
         if (!s) continue;
-        for (const auto &sec : s->sections)
-            offset += sec.slides().size();
+        offset += s->allSlides().size();
     }
     return offset;
 }
@@ -979,13 +979,31 @@ void LyricsDock::loadSongSlides(const Song &song)
 
     for (int si = 0; si < song.sections.size(); ++si) {
         const auto &sec = song.sections[si];
-        QString lbl = sec.label.isEmpty()
-                      ? sectionTypeLabel(sec.type) : sec.label;
-        for (const auto &slideText : sec.slides()) {
-            m_slides              << qMakePair(lbl, slideText);
+
+        // Build per-section slides list (Chinese or English)
+        QList<LyricsSlide> secSlides;
+        if (sec.isChinese) {
+            secSlides = sec.chineseSlides();
+        } else {
+            QString lbl = sec.label.isEmpty()
+                          ? sectionTypeLabel(sec.type) : sec.label;
+            for (const auto &slideText : sec.slides()) {
+                LyricsSlide sl;
+                sl.section = lbl;
+                sl.text    = slideText;
+                secSlides << sl;
+            }
+        }
+
+        for (const auto &sl : secSlides) {
+            m_slides              << sl;
             m_slideSectionIndices << si;
+            // Show "中" marker in section label for Chinese slides
+            QString displaySection = sl.section;
+            if (sl.isChinese)
+                displaySection = QString::fromUtf8("中  ") + sl.section;
             auto *btn = new SlideButton(
-                lbl, slideText, globalIdx, si, m_slideContainer);
+                displaySection, sl.text, globalIdx, si, m_slideContainer);
             connect(btn, &SlideButton::clicked,
                     this, &LyricsDock::onSlideClicked);
             connect(btn, &SlideButton::editRequested,
@@ -1033,16 +1051,22 @@ void LyricsDock::updateSlideCounter()
 void LyricsDock::pushCurrentSlide()
 {
     if (m_activeSlide < 0 || m_activeSlide >= m_slides.size()) return;
-    const QString &lyrics  = m_slides[m_activeSlide].second;
-    const QString &section = m_slides[m_activeSlide].first;
-    const QString &title   = m_currentSong.title;
-    lyrics_renderer_push(lyrics, section, title);
+    const LyricsSlide &sl  = m_slides[m_activeSlide];
+    const QString     &title = m_currentSong.title;
+
+    if (sl.isChinese) {
+        lyrics_renderer_push_chinese(sl.text, sl.pinyin, sl.english,
+                                     sl.section, title);
+    } else {
+        lyrics_renderer_push(sl.text, sl.section, title);
+    }
+
     // Broadcast global slide index so browser highlights the correct tile.
     // Use cached m_currentSongSlideOffset (set in onSequenceSongSelected)
     // instead of re-computing — avoids any timing mismatch with currentRow().
     if (m_wsServer) {
         int globalIdx = m_currentSongSlideOffset + m_activeSlide;
-        m_wsServer->broadcastSlide(lyrics, section, title, globalIdx);
+        m_wsServer->broadcastSlide(sl.text, sl.section, title, globalIdx);
     }
 }
 

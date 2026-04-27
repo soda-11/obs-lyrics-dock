@@ -1,8 +1,6 @@
 #pragma once
-// song-edit-dialog.hpp  v5.0
-// Changes: duplicate without "(copy)", no key/tempo/copyright,
-// duplicate title warning, quick paste shows existing lyrics,
-// optional initial section index to open.
+// song-edit-dialog.hpp  v10.0
+// Changes: adds Chinese / Pinyin / Translation trilingual editor per section
 
 #include "song-manager.hpp"
 #include <QDialog>
@@ -12,6 +10,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QListWidget>
+#include <QCheckBox>
 
 class SectionListWidget : public QListWidget {
     Q_OBJECT
@@ -44,6 +43,7 @@ private slots:
     void onMoveSectionDown();
     void onSectionOrderChanged();
     void onSectionTypeChanged(int idx);
+    void onChineseToggled(bool checked);
     void onQuickPasteClicked();
     void onSaveToLibrary();
     void onSaveAsNew();
@@ -67,7 +67,21 @@ private:
                        *m_moveSectionUpBtn, *m_moveSectionDownBtn;
     QComboBox          *m_sectionTypeCombo;
     QLineEdit          *m_sectionLabelEdit;
-    QTextEdit          *m_sectionTextEdit;
+
+    // ── Lyrics content area ────────────────────────────────────
+    // English mode: m_sectionTextEdit only.
+    // Chinese mode: all three text edits visible.
+    QLabel    *m_col1Label;           // "Lyrics:" or "Chinese:" label
+    QTextEdit *m_sectionTextEdit;     // Block 1: English lyrics OR Chinese text
+    QCheckBox *m_chineseCheck;        // "Chinese Lyrics" toggle
+    QWidget   *m_chineseOptionsRow;   // row with Pinyin + Translation checkboxes
+    QCheckBox *m_pinyinCheck;         // "Show Pinyin" (block 2 enabled)
+    QCheckBox *m_translationCheck;    // "Show Translation" (block 3 enabled)
+    QWidget   *m_pinyinWidget;        // block 2 container (hidden in English mode)
+    QTextEdit *m_pinyinEdit;          // Block 2: Pinyin text
+    QWidget   *m_englishWidget;       // block 3 container (hidden in English mode)
+    QTextEdit *m_englishEdit;         // Block 3: English translation
+
     QTextEdit          *m_quickPasteEdit;
     QPushButton        *m_quickPasteBtn;
 };

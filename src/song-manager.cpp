@@ -1,4 +1,4 @@
-// song-manager.cpp  v2.1
+// song-manager.cpp  v10.0
 #include "song-manager.hpp"
 
 #include <QFile>
@@ -36,29 +36,24 @@ SectionType sectionTypeFromString(const QString &s)
     return SectionType::Custom;
 }
 
-// ── Global lines-per-slide setting ───────────────────────────
+// ── Global lines-per-slide (English songs only) ───────────────
 static int g_linesPerSlide = 4;
 void setGlobalLinesPerSlide(int n) { g_linesPerSlide = qMax(1, n); }
 int  getGlobalLinesPerSlide()      { return g_linesPerSlide; }
 
-// ── Slide distribution algorithm ──────────────────────────────
-// Rules:
-//  1. A blank line inside a section always starts a new slide.
-//     Consecutive blank lines are collapsed (no empty slides).
-//  2. Within each paragraph (text between blank lines), lines are
-//     chunked into groups of `lpp` (lines-per-slide).
-//  3. No slide ever starts or ends with a blank line.
+// ── English slide distribution ────────────────────────────────
+// Blank line = forced slide break; within each paragraph lines are
+// chunked into groups of lpp (lines-per-slide).
 QList<QString> LyricsSection::slides() const
 {
     const int lpp = g_linesPerSlide;
     const QStringList allLines = text.split('\n');
 
     QList<QString> result;
-    QStringList paragraph; // lines in the current paragraph
+    QStringList    paragraph;
 
     auto flushParagraph = [&]() {
         if (paragraph.isEmpty()) return;
-        // Chunk paragraph into lpp-line slides
         for (int i = 0; i < paragraph.size(); i += lpp) {
             QStringList chunk;
             for (int j = i; j < qMin(i + lpp, paragraph.size()); ++j)
@@ -70,44 +65,101 @@ QList<QString> LyricsSection::slides() const
     };
 
     for (const QString &line : allLines) {
-        if (line.trimmed().isEmpty()) {
-            // Blank line → end current paragraph, start fresh
+        if (line.trimmed().isEmpty())
             flushParagraph();
-        } else {
+        else
             paragraph << line;
-        }
     }
-    flushParagraph(); // flush any trailing lines
+    flushParagraph();
+    return result;
+}
 
+// ── Chinese slide distribution ────────────────────────────────
+// All three blocks (text / pinyin / english) are split on blank lines.
+// Each blank-line-delimited group in `text` becomes one slide.
+// Pinyin must have exactly the same number of non-blank lines as text
+// (1:1 per line); English may have any number ≥ Chinese line count.
+QList<LyricsSlide> LyricsSection::chineseSlides() const
+{
+    // Split each block into paragraphs (groups separated by blank lines)
+    auto toParagraphs = [](const QString &src) -> QList<QStringList> {
+        QList<QStringList> paras;
+        QStringList cur;
+        for (const QString &line : src.split('\n')) {
+            if (line.trimmed().isEmpty()) {
+                if (!cur.isEmpty()) { paras << cur; cur.clear(); }
+            } else {
+                cur << line;
+            }
+        }
+        if (!cur.isEmpty()) paras << cur;
+        return paras;
+    };
+
+    QList<QStringList> chParas = toParagraphs(text);
+    QList<QStringList> pyParas = showPinyin      ? toParagraphs(pinyin)  : QList<QStringList>();
+    QList<QStringList> enParas = showTranslation ? toParagraphs(english) : QList<QStringList>();
+
+    QString lbl = label.isEmpty() ? sectionTypeLabel(type) : label;
+
+    QList<LyricsSlide> result;
+    for (int i = 0; i < chParas.size(); ++i) {
+        LyricsSlide sl;
+        sl.isChinese = true;
+        sl.section   = lbl;
+        sl.text      = chParas[i].join('\n');
+        sl.pinyin    = (showPinyin      && i < pyParas.size()) ? pyParas[i].join('\n') : QString();
+        sl.english   = (showTranslation && i < enParas.size()) ? enParas[i].join('\n') : QString();
+        result << sl;
+    }
     return result;
 }
 
 QJsonObject LyricsSection::toJson() const
 {
     QJsonObject o;
-    o["type"]  = sectionTypeLabel(type);
-    o["label"] = label;
-    o["text"]  = text;
+    o["type"]            = sectionTypeLabel(type);
+    o["label"]           = label;
+    o["text"]            = text;
+    o["isChinese"]       = isChinese;
+    o["showPinyin"]      = showPinyin;
+    o["showTranslation"] = showTranslation;
+    if (!pinyin.isEmpty())  o["pinyin"]  = pinyin;
+    if (!english.isEmpty()) o["english"] = english;
     return o;
 }
 
 LyricsSection LyricsSection::fromJson(const QJsonObject &o)
 {
     LyricsSection s;
-    s.type  = sectionTypeFromString(o["type"].toString());
-    s.label = o["label"].toString();
-    s.text  = o["text"].toString();
+    s.type            = sectionTypeFromString(o["type"].toString());
+    s.label           = o["label"].toString();
+    s.text            = o["text"].toString();
+    s.isChinese       = o["isChinese"].toBool(false);
+    s.showPinyin      = o["showPinyin"].toBool(false);
+    s.showTranslation = o["showTranslation"].toBool(false);
+    s.pinyin          = o["pinyin"].toString();
+    s.english         = o["english"].toString();
     return s;
 }
 
-QList<QPair<QString,QString>> Song::allSlides() const
+QList<LyricsSlide> Song::allSlides() const
 {
-    QList<QPair<QString,QString>> result;
-    for (const auto &sec : sections)
-        for (const auto &slide : sec.slides())
-            result << qMakePair(
-                sec.label.isEmpty() ? sectionTypeLabel(sec.type) : sec.label,
-                slide);
+    QList<LyricsSlide> result;
+    for (const auto &sec : sections) {
+        if (sec.isChinese) {
+            result << sec.chineseSlides();
+        } else {
+            QString lbl = sec.label.isEmpty()
+                          ? sectionTypeLabel(sec.type) : sec.label;
+            for (const auto &slideText : sec.slides()) {
+                LyricsSlide sl;
+                sl.section = lbl;
+                sl.text    = slideText;
+                result << sl;
+            }
+        }
+    }
     return result;
 }
 
