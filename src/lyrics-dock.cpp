@@ -278,9 +278,7 @@ SlideButton::SlideButton(const QString &section, const QString &text,
                          QWidget *parent)
     : QFrame(parent), m_slideIdx(slideIndex), m_sectionIdx(sectionIndex)
 {
-    setFixedWidth(BASE_W);
-    setMinimumHeight(BASE_H);
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Minimum);
+    setFixedSize(BASE_W, BASE_H);   // applyScale() will recompute after text is set
     setCursor(Qt::PointingHandCursor);
     setFrameShape(QFrame::StyledPanel);
     setContextMenuPolicy(Qt::DefaultContextMenu);
@@ -302,19 +300,38 @@ SlideButton::SlideButton(const QString &section, const QString &text,
 
 void SlideButton::applyScale(double scale, const QString &fontFamily)
 {
-    setFixedWidth(qMax(80, (int)(BASE_W * scale)));
-    setMinimumHeight(qMax(50, (int)(BASE_H * scale)));
+    int w  = qMax(80, (int)(BASE_W * scale));
+    int fs = qMax(7,  (int)(12 * scale));
+    QString ff = fontFamily.isEmpty() ? "Arial" : fontFamily;
     QString tc = m_active ? "#fff"    : "#ccc";
     QString sc = m_active ? "#aad4ff" : "#ffff77";
-    int fs = qMax(7, (int)(12 * scale));
-    int ls = qMax(7, (int)(12 * scale));
-    QString ff = fontFamily.isEmpty() ? "Arial" : fontFamily;
+
     m_textLbl->setStyleSheet(
         QString("font-family: '%1'; font-size: %2px; color: %3;")
             .arg(ff).arg(fs).arg(tc));
     m_sectionLbl->setStyleSheet(
         QString("font-family: '%1'; font-size: %2px; font-weight: bold; color: %3;")
-            .arg(ff).arg(ls).arg(sc));
+            .arg(ff).arg(fs).arg(sc));
+
+    // Measure actual text height so the card is exactly as tall as its content.
+    // Using QFontMetrics::boundingRect with TextWordWrap gives the true pixel
+    // height needed for the card body text at this width.  This prevents cards
+    // from stretching to fill the slide panel's remaining space.
+    QFont font(ff);
+    font.setPixelSize(fs);
+    font.setBold(true);
+    QFontMetrics fm(font);
+
+    int innerW = qMax(1, w - 12); // 6 px left + 6 px right layout margins
+    int secH   = fm.height() + 2; // section label: one line
+    QRect textBr = fm.boundingRect(QRect(0, 0, innerW, 0),
+                                   Qt::TextWordWrap | Qt::AlignLeft,
+                                   m_textLbl->text());
+    int textH  = qMax(fm.height(), textBr.height()) + 2;
+    // 4 top + 4 bottom margin + 2 spacing between labels = 10 px overhead
+    int h = qMax(qMax(50, (int)(BASE_H * scale / 2)), secH + textH + 10);
+
+    setFixedSize(w, h);
 }
 
 void SlideButton::setActive(bool active)
