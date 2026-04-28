@@ -62,9 +62,10 @@ static QString s_scripText;
 #define DEF_SCRIP_H_MARGIN 100   // left/right horizontal margin (px)
 #define DEF_CH_PINYIN_Y      0   // Y start of pinyin source (overlaps Chinese)
 #define DEF_CH_CHINESE_Y    34   // Y start of Chinese chars (~1 pinyin line below)
-#define DEF_CH_PINYIN_H    320   // extents height of pinyin text box
-#define DEF_CH_CHINESE_H   320   // extents height of Chinese char text box
-#define DEF_CH_LINE_SPACING  2   // extra blank lines inserted between each content line
+#define DEF_CH_PINYIN_H       320  // extents height of pinyin text box
+#define DEF_CH_CHINESE_H      320  // extents height of Chinese char text box
+#define DEF_CH_PINYIN_SPACING   2  // blank lines between each pinyin content line
+#define DEF_CH_CHINESE_SPACING  2  // blank lines between each Chinese char content line
 
 // ── File-type helpers ─────────────────────────────────────────
 static const QSet<QString> s_imageExts = {
@@ -109,11 +110,12 @@ struct LyricsInstance {
     int scripHMargin = DEF_SCRIP_H_MARGIN;
 
     // Chinese mode layout — start positions (Y) and extents heights
-    int chPinyinY   = DEF_CH_PINYIN_Y;    // Y start of pinyin source
-    int chChineseY  = DEF_CH_CHINESE_Y;   // Y start of Chinese char source
-    int chPinyinH   = DEF_CH_PINYIN_H;    // extents height of pinyin box
-    int chChineseH  = DEF_CH_CHINESE_H;   // extents height of Chinese char box
-    int chLineSpacing = DEF_CH_LINE_SPACING; // extra blank lines between content pairs
+    int chPinyinY      = DEF_CH_PINYIN_Y;       // Y start of pinyin source
+    int chChineseY     = DEF_CH_CHINESE_Y;      // Y start of Chinese char source
+    int chPinyinH      = DEF_CH_PINYIN_H;       // extents height of pinyin box
+    int chChineseH     = DEF_CH_CHINESE_H;      // extents height of Chinese char box
+    int chPinyinSpacing  = DEF_CH_PINYIN_SPACING;  // blank lines between pinyin content lines
+    int chChineseSpacing = DEF_CH_CHINESE_SPACING; // blank lines between Chinese char content lines
 
     // Per-instance Chinese mode flag (set alongside the text children update).
     // Read by src_render() on the render thread without locking.
@@ -244,11 +246,12 @@ static void updateChineseChildren(LyricsInstance *inst, obs_data_t *s,
         }
         return result.join('\n');
     };
-    int sp = inst->chLineSpacing;
     pushTextChild(inst->srcPinyin, s, "ch_pinyin_",
-                  addSpacing(pinyin,  sp), inst->canvasW, inst->chPinyinH);
+                  addSpacing(pinyin,  inst->chPinyinSpacing),
+                  inst->canvasW, inst->chPinyinH);
     pushTextChild(inst->srcLyrics, s, "ch_chinese_",
-                  addSpacing(chinese, sp), inst->canvasW, inst->chChineseH);
+                  addSpacing(chinese, inst->chChineseSpacing),
+                  inst->canvasW, inst->chChineseH);
     // English translation starts below the Chinese text box
     int englishH = qMax(0, inst->canvasH - inst->bottomBarH
                            - inst->chChineseY - inst->chChineseH);
@@ -386,9 +389,10 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->bottomBarH  =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin=(int)obs_data_get_int(settings,"scrip_h_margin");
-    inst->chPinyinH   =(int)obs_data_get_int(settings,"ch_pinyin_h");
-    inst->chChineseH  =(int)obs_data_get_int(settings,"ch_chinese_h");
-    inst->chLineSpacing=(int)obs_data_get_int(settings,"ch_line_spacing");
+    inst->chPinyinH      =(int)obs_data_get_int(settings,"ch_pinyin_h");
+    inst->chPinyinSpacing=(int)obs_data_get_int(settings,"ch_pinyin_spacing");
+    inst->chChineseH     =(int)obs_data_get_int(settings,"ch_chinese_h");
+    inst->chChineseSpacing=(int)obs_data_get_int(settings,"ch_chinese_spacing");
     if(!inst->canvasW)       inst->canvasW      =DEF_CANVAS_W;
     if(!inst->canvasH)       inst->canvasH      =DEF_CANVAS_H;
     if(!inst->bottomBarH)    inst->bottomBarH   =DEF_BOTTOM_BAR_H;
@@ -480,9 +484,10 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
     obs_data_set_default_int(s,"ch_pinyin_y",    DEF_CH_PINYIN_Y);
     obs_data_set_default_int(s,"ch_chinese_y",   DEF_CH_CHINESE_Y);
-    obs_data_set_default_int(s,"ch_pinyin_h",    DEF_CH_PINYIN_H);
-    obs_data_set_default_int(s,"ch_chinese_h",   DEF_CH_CHINESE_H);
-    obs_data_set_default_int(s,"ch_line_spacing", DEF_CH_LINE_SPACING);
+    obs_data_set_default_int(s,"ch_pinyin_h",       DEF_CH_PINYIN_H);
+    obs_data_set_default_int(s,"ch_pinyin_spacing", DEF_CH_PINYIN_SPACING);
+    obs_data_set_default_int(s,"ch_chinese_h",      DEF_CH_CHINESE_H);
+    obs_data_set_default_int(s,"ch_chinese_spacing",DEF_CH_CHINESE_SPACING);
 
     uint32_t white=0x00FFFFFFu,black=0x00000000u;
     uint32_t lgrey=0x00CCCCCCu,mgrey=0x00AAAAAAu;
@@ -596,17 +601,29 @@ static obs_properties_t *src_props(void *)
 {
     obs_properties_t *props=obs_properties_create();
     obs_properties_t *cgrp=obs_properties_create();
-    obs_properties_add_int(cgrp,"canvas_w",     "Width (px)",   320,7680,1);
-    obs_properties_add_int(cgrp,"canvas_h",     "Height (px)",  180,4320,1);
-    obs_properties_add_int(cgrp,"bottom_bar_h", "Lyrics: bottom bar height (px)",10,400,1);
-    obs_properties_add_int(cgrp,"scrip_title_h",  "Scripture: title strip height (px)",10,400,1);
-    obs_properties_add_int(cgrp,"scrip_h_margin", "Scripture: left/right margin (px)",  0,400,1);
-    obs_properties_add_int(cgrp,"ch_pinyin_y",  "Chinese: Pinyin starting Y position (px)",  0,720,1);
-    obs_properties_add_int(cgrp,"ch_chinese_y", "Chinese: Character starting Y position (px)",0,720,1);
-    obs_properties_add_int(cgrp,"ch_pinyin_h",  "Chinese: Pinyin text box height (px)",  20,600,1);
-    obs_properties_add_int(cgrp,"ch_chinese_h", "Chinese: Character text box height (px)",20,600,1);
-    obs_properties_add_int(cgrp,"ch_line_spacing","Chinese: Line spacing between pairs (blank lines)",0,5,1);
-    obs_properties_add_text(cgrp,"_info",
+    obs_properties_add_int(cgrp,"canvas_w",      "Width (px)",                       320,7680,1);
+    obs_properties_add_int(cgrp,"canvas_h",      "Height (px)",                      180,4320,1);
+    obs_properties_add_int(cgrp,"bottom_bar_h",  "Lyrics: bottom bar height (px)",    10, 400,1);
+    obs_properties_add_int(cgrp,"scrip_title_h", "Scripture: title strip height (px)", 10, 400,1);
+    obs_properties_add_int(cgrp,"scrip_h_margin","Scripture: left/right margin (px)",   0, 400,1);
+
+    // ── Chinese interleave layout sub-group ───────────────────
+    obs_properties_t *chgrp = obs_properties_create();
+    obs_properties_add_int(chgrp,"ch_pinyin_y",
+        "Pinyin starting Y position (px)", 0, 720, 1);
+    obs_properties_add_int(chgrp,"ch_pinyin_h",
+        "Pinyin text box height (px)", 20, 600, 1);
+    obs_properties_add_int(chgrp,"ch_pinyin_spacing",
+        "Pinyin line spacing (blank lines between lines)", 0, 5, 1);
+    obs_properties_add_int(chgrp,"ch_chinese_y",
+        "Characters starting Y position (px)", 0, 720, 1);
+    obs_properties_add_int(chgrp,"ch_chinese_h",
+        "Characters text box height (px)", 20, 600, 1);
+    obs_properties_add_int(chgrp,"ch_chinese_spacing",
+        "Characters line spacing (blank lines between lines)", 0, 5, 1);
+    obs_properties_add_group(cgrp,"ch_layout_grp",
+        "Chinese Interleave Layout", OBS_GROUP_NORMAL, chgrp);
+    obs_properties_add_text(cgrp, "_info",
         "Render order (bottom to top):\n"
         "  1. Media layer  (background images/videos)\n"
         "  English lyrics mode:\n"
@@ -644,9 +661,10 @@ static void src_update(void *data, obs_data_t *settings)
     inst->bottomBarH  =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH  =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin =(int)obs_data_get_int(settings,"scrip_h_margin");
-    inst->chPinyinH    =(int)obs_data_get_int(settings,"ch_pinyin_h");
-    inst->chChineseH   =(int)obs_data_get_int(settings,"ch_chinese_h");
-    inst->chLineSpacing=(int)obs_data_get_int(settings,"ch_line_spacing");
+    inst->chPinyinH       =(int)obs_data_get_int(settings,"ch_pinyin_h");
+    inst->chPinyinSpacing =(int)obs_data_get_int(settings,"ch_pinyin_spacing");
+    inst->chChineseH      =(int)obs_data_get_int(settings,"ch_chinese_h");
+    inst->chChineseSpacing=(int)obs_data_get_int(settings,"ch_chinese_spacing");
     if(!inst->canvasW)      inst->canvasW      =DEF_CANVAS_W;
     if(!inst->canvasH)      inst->canvasH      =DEF_CANVAS_H;
     if(!inst->bottomBarH)   inst->bottomBarH   =DEF_BOTTOM_BAR_H;

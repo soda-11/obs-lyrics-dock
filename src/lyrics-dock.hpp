@@ -25,6 +25,7 @@
 #include <QColor>
 #include <QMouseEvent>
 #include <QSpinBox>
+#include <QFontComboBox>
 
 // ── Song Library popup ────────────────────────────────────────
 class SongLibraryPopup : public QDialog {
@@ -64,7 +65,7 @@ public:
                 int slideIndex, int sectionIndex,
                 QWidget *parent = nullptr);
     void setActive(bool active);
-    void applyScale(double scale);
+    void applyScale(double scale, const QString &fontFamily = "Arial");
     int  slideIndex()   const { return m_slideIdx; }
     int  sectionIndex() const { return m_sectionIdx; }
 signals:
@@ -150,6 +151,8 @@ private:
     QToolButton    *m_zoomInBtn, *m_zoomOutBtn;
     QSlider        *m_zoomSlider;
     QLabel         *m_zoomLabel;
+    QFontComboBox  *m_slideFontCombo  = nullptr;
+    QString         m_slideFontFamily = "Arial";
 
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;

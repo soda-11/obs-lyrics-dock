@@ -278,7 +278,9 @@ SlideButton::SlideButton(const QString &section, const QString &text,
                          QWidget *parent)
     : QFrame(parent), m_slideIdx(slideIndex), m_sectionIdx(sectionIndex)
 {
-    setFixedSize(BASE_W, BASE_H);
+    setFixedWidth(BASE_W);
+    setMinimumHeight(BASE_H);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Minimum);
     setCursor(Qt::PointingHandCursor);
     setFrameShape(QFrame::StyledPanel);
     setContextMenuPolicy(Qt::DefaultContextMenu);
@@ -298,19 +300,21 @@ SlideButton::SlideButton(const QString &section, const QString &text,
     setActive(false);
 }
 
-void SlideButton::applyScale(double scale)
+void SlideButton::applyScale(double scale, const QString &fontFamily)
 {
-    setFixedSize(qMax(80, (int)(BASE_W * scale)),
-                 qMax(50, (int)(BASE_H * scale)));
+    setFixedWidth(qMax(80, (int)(BASE_W * scale)));
+    setMinimumHeight(qMax(50, (int)(BASE_H * scale)));
     QString tc = m_active ? "#fff"    : "#ccc";
     QString sc = m_active ? "#aad4ff" : "#ffff77";
     int fs = qMax(7, (int)(12 * scale));
     int ls = qMax(7, (int)(12 * scale));
+    QString ff = fontFamily.isEmpty() ? "Arial" : fontFamily;
     m_textLbl->setStyleSheet(
-        QString("font-size: %1px; color: %2;").arg(fs).arg(tc));
+        QString("font-family: '%1'; font-size: %2px; color: %3;")
+            .arg(ff).arg(fs).arg(tc));
     m_sectionLbl->setStyleSheet(
-        QString("font-size: %1px; font-weight: bold; color: %2;")
-            .arg(ls).arg(sc));
+        QString("font-family: '%1'; font-size: %2px; font-weight: bold; color: %3;")
+            .arg(ff).arg(ls).arg(sc));
 }
 
 void SlideButton::setActive(bool active)
@@ -481,6 +485,7 @@ void LyricsDock::saveState()
     }
     obj["colorPresets"]  = presets;
     obj["linesPerSlide"] = m_linesPerSlideSpin ? m_linesPerSlideSpin->value() : 4;
+    obj["slideFont"]     = m_slideFontFamily;
 
     QFile f(statePath());
     if (f.open(QIODevice::WriteOnly))
@@ -510,6 +515,16 @@ void LyricsDock::loadState()
         m_colorBtn[i]->setColors(
             QColor((fc >> 16) & 0xFF, (fc >> 8) & 0xFF, fc & 0xFF),
             QColor((oc >> 16) & 0xFF, (oc >> 8) & 0xFF, oc & 0xFF));
+    }
+
+    // Restore slide card font
+    QString sf = doc.object()["slideFont"].toString("Arial");
+    if (!sf.isEmpty()) {
+        m_slideFontFamily = sf;
+        if (m_slideFontCombo) {
+            QSignalBlocker blk(m_slideFontCombo);
+            m_slideFontCombo->setCurrentFont(QFont(sf));
+        }
     }
 
     // Restore lines-per-slide setting
@@ -756,6 +771,16 @@ void LyricsDock::buildUi()
     m_zoomLabel->setFixedWidth(38);
     m_zoomLabel->setStyleSheet("color: #888; font-size: 9px;");
 
+    // Font picker for slide card text
+    auto *fontLbl = new QLabel("Font:");
+    fontLbl->setStyleSheet("color:#888;font-size:9px;");
+    m_slideFontCombo = new QFontComboBox;
+    m_slideFontCombo->setCurrentFont(QFont("Arial"));
+    m_slideFontCombo->setFixedWidth(130);
+    m_slideFontCombo->setFixedHeight(22);
+    m_slideFontCombo->setToolTip("Font displayed on slide cards (display only)");
+    m_slideFontCombo->setEditable(false);
+
     ctrlL->addWidget(m_prevBtn);
     ctrlL->addWidget(m_slideCounter);
     ctrlL->addWidget(m_nextBtn);
@@ -764,6 +789,9 @@ void LyricsDock::buildUi()
     ctrlL->addWidget(m_zoomSlider);
     ctrlL->addWidget(m_zoomInBtn);
     ctrlL->addWidget(m_zoomLabel);
+    ctrlL->addSpacing(8);
+    ctrlL->addWidget(fontLbl);
+    ctrlL->addWidget(m_slideFontCombo);
 
     slidesPanelL->addWidget(m_slideArea, 1);
     slidesPanelL->addWidget(ctrlBar);
@@ -838,6 +866,14 @@ void LyricsDock::buildUi()
             this, &LyricsDock::onZoomOut);
     connect(m_zoomSlider, &QSlider::valueChanged,
             this, &LyricsDock::onZoomSlider);
+
+    // Font picker — update card font family and redraw all cards
+    connect(m_slideFontCombo, &QFontComboBox::currentFontChanged,
+            this, [this](const QFont &f) {
+                m_slideFontFamily = f.family();
+                applyZoomToAll();
+                saveState();
+            });
 
     // Lines-per-slide spinbox: rebuild slides when value changes
     connect(m_linesPerSlideSpin, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -958,7 +994,7 @@ void LyricsDock::removeSequenceRow(int row)
 void LyricsDock::applyZoomToAll()
 {
     for (auto *b : m_slideButtons)
-        b->applyScale(m_slideScale);
+        b->applyScale(m_slideScale, m_slideFontFamily);
     m_slideContainer->adjustSize();
 }
 
