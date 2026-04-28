@@ -1176,7 +1176,6 @@ void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor)
 void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
                                                uint32_t outlineColor)
 {
-    // Update scr_text_ color (the main body box) for scripture mode.
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
@@ -1186,6 +1185,40 @@ void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
                          (long long)(outlineColor & 0x00FFFFFF));
         if(s_scriptureMode)
             updateScriptureChildren(inst,s,s_scripTitle,s_scripText);
+        obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        obs_data_set_int(s,"ch_chinese_color",
+                         (long long)(fontColor   & 0x00FFFFFF));
+        obs_data_set_int(s,"ch_chinese_outline_color",
+                         (long long)(outlineColor & 0x00FFFFFF));
+        obs_data_set_int(s,"ch_english_color",
+                         (long long)(fontColor   & 0x00FFFFFF));
+        obs_data_set_int(s,"ch_english_outline_color",
+                         (long long)(outlineColor & 0x00FFFFFF));
+        if(s_chineseMode)
+            updateChineseChildren(inst,s,s_pinyin,s_lyrics,s_english);
+        obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_set_pinyin_color(uint32_t fontColor, uint32_t outlineColor)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        obs_data_set_int(s,"ch_pinyin_color",
+                         (long long)(fontColor   & 0x00FFFFFF));
+        obs_data_set_int(s,"ch_pinyin_outline_color",
+                         (long long)(outlineColor & 0x00FFFFFF));
+        if(s_chineseMode)
+            updateChineseChildren(inst,s,s_pinyin,s_lyrics,s_english);
         obs_data_release(s);
     }
 }

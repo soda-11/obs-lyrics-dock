@@ -145,7 +145,7 @@ private:
     QList<SlideButton*> m_slideButtons;
 
     QPushButton    *m_prevBtn, *m_nextBtn, *m_blackoutBtn;
-    ColorPresetButton *m_colorBtn[3] = {nullptr, nullptr, nullptr};
+    ColorPresetButton *m_colorBtn[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     QSpinBox       *m_linesPerSlideSpin = nullptr;
     QLabel         *m_slideCounter;
     QToolButton    *m_zoomInBtn, *m_zoomOutBtn;

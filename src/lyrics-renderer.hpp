@@ -57,5 +57,9 @@ void lyrics_renderer_mv_play_pause(bool pause);
 // fontColor / outlineColor: 0x00BBGGRR  (Windows COLORREF / OBS text-gdiplus format)
 void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor);
 void lyrics_renderer_set_scripture_text_color(uint32_t fontColor, uint32_t outlineColor);
+// Chinese mode: set Chinese character + translation color (used by color presets 1-3)
+void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor);
+// Chinese mode: set pinyin color (used by color presets 4-5)
+void lyrics_renderer_set_pinyin_color(uint32_t fontColor, uint32_t outlineColor);
 
 #define LYRICS_SOURCE_ID "obs-lyrics-source"

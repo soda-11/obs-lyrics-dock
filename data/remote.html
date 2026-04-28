@@ -95,6 +95,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
   margin-bottom:6px;border:1px solid var(--border);transition:border-color 0.2s;}
 .scoreSlide.active{border:2px solid var(--accent);background:#0a1f35;}
 .scoreSlideText{font-size:var(--score-font-size,15px);line-height:1.5;white-space:pre-wrap;color:#eee;}
+.scorePinyin{color:#ffff7f;}
 
 /* ── Song list (manager) ── */
 .songItem{background:var(--bg2);border-radius:8px;margin-bottom:6px;
@@ -677,6 +678,23 @@ function highlightScoreSlide(slideIdx){
   var active=document.querySelector('.scoreSlide.active');
   if(active) active.scrollIntoView({behavior:'smooth',block:'center'});
 }
+function buildChineseSlideHTML(sl){
+  var pyLines=(sl.pinyin||'').split('\n');
+  var zhLines=(sl.text||'').split('\n');
+  var max=Math.max(pyLines.length,zhLines.length);
+  var parts=[];
+  for(var i=0;i<max;i++){
+    var py=(i<pyLines.length)?pyLines[i].trim():'';
+    var zh=(i<zhLines.length)?zhLines[i].trim():'';
+    if(py) parts.push('<span class="scorePinyin">'+esc(py)+'</span>');
+    if(zh) parts.push(esc(zh));
+  }
+  if(sl.english&&sl.english.trim()){
+    parts.push('');  // blank separator line
+    sl.english.split('\n').forEach(function(ln){ if(ln.trim()) parts.push(esc(ln)); });
+  }
+  return parts.join('<br>');
+}
 function renderScore(){
   var sel=document.getElementById('scoreSongSelect');
   var body=document.getElementById('scoreBody');
@@ -703,8 +721,11 @@ function renderScore(){
       return '<div class="scoreSection">'
         +'<div class="scoreSectionLabel">'+esc(sec.label)+'</div>'
         +sec.slides.map(function(sl){
+          var content=sl.isChinese
+            ? buildChineseSlideHTML(sl)
+            : esc(sl.text);
           return '<div class="scoreSlide" data-slide-idx="'+sl.slideIndex+'">'
-            +'<div class="scoreSlideText">'+esc(sl.text)+'</div>'
+            +'<div class="scoreSlideText">'+content+'</div>'
             +'</div>';
         }).join('')
         +'</div>';

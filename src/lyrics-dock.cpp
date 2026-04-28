@@ -41,13 +41,13 @@ static constexpr int kHdrBtnH = 38;
 SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
 {
     setWindowTitle("Song Library");
-    setMinimumSize(760, 540);
+    setMinimumSize(800, 540);
 
     auto *mainLayout = new QHBoxLayout(this);
+    mainLayout->setSpacing(8);
 
-    // Left: list + controls
+    // Left panel — 30% width: search + song list + action buttons
     auto *leftPanel  = new QWidget;
-    leftPanel->setMinimumWidth(320);
     auto *leftLayout = new QVBoxLayout(leftPanel);
     leftLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -59,11 +59,12 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
     m_list->setStyleSheet(
         "QListWidget { background: #1e1e1e; }"
         "QListWidget::item:selected { background: #1e6bb8; }");
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
 
     auto *btnRow    = new QHBoxLayout;
-    m_addBtn    = new QPushButton("Add to Sequence");
-    m_removeBtn = new QPushButton("Remove from Sequence");
-    m_deleteBtn = new QPushButton("Delete from Library");
+    m_addBtn    = new QPushButton("Add");
+    m_removeBtn = new QPushButton("Remove");
+    m_deleteBtn = new QPushButton("Delete");
     auto *newBtn    = new QPushButton("New Song");
     auto *closeBtn  = new QPushButton("Close");
 
@@ -75,8 +76,6 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
     m_addBtn->setEnabled(false);
     m_removeBtn->setEnabled(false);
     m_deleteBtn->setEnabled(false);
-
-    // Colour the delete button red-ish to indicate destructive action
     m_deleteBtn->setStyleSheet(
         "QPushButton { color: #ff6b6b; }"
         "QPushButton:disabled { color: #555; }");
@@ -93,27 +92,26 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
     leftLayout->addWidget(m_list, 1);
     leftLayout->addLayout(btnRow);
 
-    // Right: lyrics preview
+    // Right panel — 70% width: lyrics preview
     auto *rightPanel  = new QWidget;
-    rightPanel->setMinimumWidth(300);
     auto *rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(0, 0, 0, 0);
 
     auto *previewLbl = new QLabel("Lyrics Preview:");
-    previewLbl->setStyleSheet("color: #888; font-size: 9px;");
+    previewLbl->setStyleSheet("color: #888;");
 
     m_lyricsPreview = new QTextEdit;
     m_lyricsPreview->setReadOnly(true);
     m_lyricsPreview->setStyleSheet(
-        "QTextEdit { background: #141414; color: #bbb;"
-        " font-size: 10px; border: 1px solid #333; }");
+        "QTextEdit { background: #141414; color: #bbb; border: 1px solid #333; }");
     m_lyricsPreview->setPlaceholderText("Click a song to preview...");
 
     rightLayout->addWidget(previewLbl);
     rightLayout->addWidget(m_lyricsPreview, 1);
 
-    mainLayout->addWidget(leftPanel);
-    mainLayout->addWidget(rightPanel);
+    // 30 / 70 split
+    mainLayout->addWidget(leftPanel,  3);
+    mainLayout->addWidget(rightPanel, 7);
 
     refreshList();
 
@@ -128,6 +126,47 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
     connect(m_deleteBtn,&QPushButton::clicked, this, &SongLibraryPopup::onDeleteSong);
     connect(newBtn,     &QPushButton::clicked, this, &SongLibraryPopup::onAddNewSong);
     connect(closeBtn,   &QPushButton::clicked, this, &QDialog::accept);
+
+    // Right-click context menu on song list
+    connect(m_list, &QListWidget::customContextMenuRequested,
+            this, [this](const QPoint &pos) {
+        auto *item = m_list->itemAt(pos);
+        if (!item) return;
+        m_list->setCurrentItem(item);
+
+        QString id = item->data(Qt::UserRole).toString();
+        bool inSeq = m_sequenceIds.contains(id);
+
+        QMenu menu(m_list);
+        auto *addAct    = menu.addAction(
+            style()->standardIcon(QStyle::SP_DialogApplyButton), "Add to Sequence");
+        auto *removeAct = menu.addAction(
+            style()->standardIcon(QStyle::SP_TrashIcon), "Remove from Sequence");
+        menu.addSeparator();
+        auto *editAct   = menu.addAction(
+            style()->standardIcon(QStyle::SP_FileDialogDetailedView), "Edit Song");
+
+        addAct->setEnabled(!inSeq);
+        removeAct->setEnabled(inSeq);
+
+        auto *chosen = menu.exec(m_list->viewport()->mapToGlobal(pos));
+        if (chosen == addAct) {
+            onAdd();
+        } else if (chosen == removeAct) {
+            onRemove();
+        } else if (chosen == editAct) {
+            auto *song = SongManager::instance().findById(id);
+            if (!song) return;
+            SongEditDialog dlg(*song, this);
+            if (dlg.exec() != QDialog::Accepted) return;
+            Song res = dlg.result();
+            if (dlg.savedAsNew())
+                SongManager::instance().addSong(res);
+            else
+                SongManager::instance().updateSong(res);
+            refreshList();
+        }
+    });
 }
 
 void SongLibraryPopup::setSequenceIds(const QList<QString> &ids)
@@ -493,7 +532,7 @@ void LyricsDock::saveState()
 
     // Color presets — store each as { "font": 0xRRGGBB, "outline": 0xRRGGBB }
     QJsonArray presets;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 5; ++i) {
         if (!m_colorBtn[i]) continue;
         QJsonObject p;
         p["font"]    = (qint64)(m_colorBtn[i]->fontColor().rgb()    & 0x00FFFFFF);
@@ -524,7 +563,7 @@ void LyricsDock::loadState()
 
     // Restore color presets
     auto pa = doc.object()["colorPresets"].toArray();
-    for (int i = 0; i < 3 && i < pa.size(); ++i) {
+    for (int i = 0; i < 5 && i < pa.size(); ++i) {
         if (!m_colorBtn[i]) continue;
         auto po = pa[i].toObject();
         uint32_t fc = (uint32_t)po["font"].toInteger(0x00FFFFFF);
@@ -696,11 +735,15 @@ void LyricsDock::buildUi()
     slidesTitleLbl->setFont(hdrFont);
     slidesTitleLbl->setStyleSheet("color:#ccc;");
 
-    // Color preset buttons (1 2 3) — use kHdrBtnH (2× normal) for the header
-    for (int i = 0; i < 3; ++i) {
+    // Color preset buttons 1-3 (Chinese chars + translation) and 4-5 (pinyin)
+    for (int i = 0; i < 5; ++i) {
         m_colorBtn[i] = new ColorPresetButton(i + 1, slidesHeader);
-        m_colorBtn[i]->setFixedSize(kBtnW, kHdrBtnH); // override constructor default
+        m_colorBtn[i]->setFixedSize(kBtnW, kHdrBtnH);
     }
+    // Small label to distinguish pinyin buttons
+    auto *pyLbl = new QLabel("Py:");
+    pyLbl->setStyleSheet("color:#aaa;font-size:9px;");
+    pyLbl->setToolTip("Buttons 4 & 5 set pinyin text color");
 
     // Lines-per-slide spinbox
     auto *lppLbl = new QLabel("Lines:");
@@ -716,11 +759,15 @@ void LyricsDock::buildUi()
         "A blank line in the lyrics always starts a new slide\n"
         "regardless of this setting.");
 
-    // Lay out: [Slides label]  [gap]  [1] [2] [3]  [Lines: spin]  [stretch]  [■ Blank]
+    // Lay out: [Slides label]  [1][2][3]  [Py:][4][5]  [Lines: spin]  [stretch]  [■ Blank]
     slidesHeaderL->addWidget(slidesTitleLbl);
     slidesHeaderL->addSpacing(6);
     for (int i = 0; i < 3; ++i)
         slidesHeaderL->addWidget(m_colorBtn[i]);
+    slidesHeaderL->addSpacing(4);
+    slidesHeaderL->addWidget(pyLbl);
+    slidesHeaderL->addWidget(m_colorBtn[3]);
+    slidesHeaderL->addWidget(m_colorBtn[4]);
     slidesHeaderL->addSpacing(4);
     slidesHeaderL->addWidget(lppLbl);
     slidesHeaderL->addWidget(m_linesPerSlideSpin);
@@ -869,12 +916,30 @@ void LyricsDock::buildUi()
             this, &LyricsDock::onNextSlide);
     connect(m_blackoutBtn,&QPushButton::clicked,
             this, &LyricsDock::onBlackoutClicked);
+    // Buttons 1-3: apply to English lyrics AND Chinese chars + translation
     for (int i = 0; i < 3; ++i) {
         connect(m_colorBtn[i], &ColorPresetButton::colorsApplied,
                 this, [this, i](QColor fc, QColor oc) {
-                    for (int j = 0; j < 3; ++j)
+                    for (int j = 0; j < 5; ++j)
                         m_colorBtn[j]->setActive(j == i);
                     onColorPresetApplied(fc, oc);
+                });
+    }
+    // Buttons 4-5: apply to pinyin only
+    for (int i = 3; i < 5; ++i) {
+        connect(m_colorBtn[i], &ColorPresetButton::colorsApplied,
+                this, [this, i](QColor fc, QColor oc) {
+                    for (int j = 0; j < 5; ++j)
+                        m_colorBtn[j]->setActive(j == i);
+                    // Byte-swap Qt RGB → OBS COLORREF (BBGGRR)
+                    uint32_t f = ((uint32_t)fc.blue()  << 16)
+                               | ((uint32_t)fc.green() <<  8)
+                               | (uint32_t)fc.red();
+                    uint32_t o = ((uint32_t)oc.blue()  << 16)
+                               | ((uint32_t)oc.green() <<  8)
+                               | (uint32_t)oc.red();
+                    lyrics_renderer_set_pinyin_color(f, o);
+                    saveState();
                 });
     }
     connect(m_zoomInBtn,  &QToolButton::clicked,
@@ -1347,7 +1412,8 @@ void LyricsDock::onColorPresetApplied(QColor fontColor, QColor outlineColor)
                 | ((uint32_t)outlineColor.green()  <<  8)
                 | (uint32_t)outlineColor.red();
     lyrics_renderer_set_text_color(fc, oc);
-    saveState(); // persist changed preset colors
+    lyrics_renderer_set_chinese_color(fc, oc); // also update Chinese chars + translation
+    saveState();
 }
 
 void LyricsDock::onNextSlide()
