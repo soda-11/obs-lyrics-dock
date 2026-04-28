@@ -60,17 +60,23 @@ static QString s_scripText;
 #define DEF_BOTTOM_BAR_H    80
 #define DEF_SCRIP_TITLE_H   70   // height of scripture title strip (px)
 #define DEF_SCRIP_H_MARGIN 100   // left/right horizontal margin (px)
-// Chinese interleave layout — Option A (one source per content line).
-// chPinyinY / chChineseY = Y of the FIRST line of each layer.
-// chPinyinLineH / chChineseLineH = pixel height of each per-line text box
-//   AND the Y increment from one line to the next within that layer.
-// chEnglishY = absolute Y where the translation block starts.
-#define DEF_CH_PINYIN_Y        0   // Y of first pinyin line
-#define DEF_CH_CHINESE_Y      34   // Y of first Chinese char line (~1 pinyin line below)
-#define DEF_CH_PINYIN_LINE_H  70   // px height & Y-step per pinyin line
-#define DEF_CH_CHINESE_LINE_H 70   // px height & Y-step per Chinese char line
-#define DEF_CH_ENGLISH_Y     280   // absolute Y of English translation block
-static constexpr int MAX_CH_LINES = 6; // max content lines supported per slide
+// Chinese interleave layout.
+// Pinyin: ONE textbox at chPinyinY, height chPinyinH.
+//   Blank lines are inserted between content lines (chPinyinSpacing) so they
+//   sit in the gaps between the Chinese character strips below.
+// Chinese characters: up to MAX_CH_STRIPS individual strips.
+//   Strip i is rendered at: chChineseY + i * chChineseInterval
+//   Each strip has height chChineseStripH.
+//   Setting chChineseInterval = 0 stacks all strips at the same Y.
+// English translation: single textbox at chEnglishY.
+#define DEF_CH_PINYIN_Y          0   // Y of pinyin textbox
+#define DEF_CH_PINYIN_H        320   // height of pinyin textbox (px)
+#define DEF_CH_PINYIN_SPACING    2   // blank lines between pinyin content lines
+#define DEF_CH_CHINESE_Y        34   // Y of Chinese char strip 0
+#define DEF_CH_CHINESE_STRIP_H 100   // height of each Chinese char strip (px)
+#define DEF_CH_CHINESE_INTERVAL 100  // Y increment between strips (px)
+#define DEF_CH_ENGLISH_Y       280   // Y of English translation textbox
+static constexpr int MAX_CH_STRIPS = 5;
 
 // ── File-type helpers ─────────────────────────────────────────
 static const QSet<QString> s_imageExts = {
@@ -98,11 +104,12 @@ struct LyricsInstance {
     obs_source_t *srcSection = nullptr;
     obs_source_t *srcTitle   = nullptr;
 
-    // Chinese mode — Option A: one text_gdiplus source per content line.
-    // srcLyrics is English-mode only; srcPinyinLines / srcChineseLines are
-    // used exclusively for Chinese (trilingual) slides.
-    obs_source_t *srcPinyinLines [MAX_CH_LINES] = {};
-    obs_source_t *srcChineseLines[MAX_CH_LINES] = {};
+    // Chinese mode — single pinyin textbox + up to MAX_CH_STRIPS character strips.
+    // srcPinyin: one textbox with blank-line spacing between content lines.
+    // srcChineseStrips[i]: one strip per content line, rendered at
+    //   chChineseY + i * chChineseInterval
+    obs_source_t *srcPinyin = nullptr;
+    obs_source_t *srcChineseStrips[MAX_CH_STRIPS] = {};
     obs_source_t *srcEnglish = nullptr;   // translation block (Chinese mode)
 
     // Scripture text children
@@ -116,12 +123,14 @@ struct LyricsInstance {
     int scripTitleH  = DEF_SCRIP_TITLE_H;
     int scripHMargin = DEF_SCRIP_H_MARGIN;
 
-    // Chinese mode layout (Option A — per-line sources)
-    int chPinyinY      = DEF_CH_PINYIN_Y;       // Y of first pinyin line
-    int chChineseY     = DEF_CH_CHINESE_Y;       // Y of first Chinese char line
-    int chPinyinLineH  = DEF_CH_PINYIN_LINE_H;  // px height & Y-step per pinyin line
-    int chChineseLineH = DEF_CH_CHINESE_LINE_H; // px height & Y-step per Chinese char line
-    int chEnglishY     = DEF_CH_ENGLISH_Y;       // absolute Y of English translation
+    // Chinese mode layout
+    int chPinyinY         = DEF_CH_PINYIN_Y;
+    int chPinyinH         = DEF_CH_PINYIN_H;
+    int chPinyinSpacing   = DEF_CH_PINYIN_SPACING;
+    int chChineseY        = DEF_CH_CHINESE_Y;
+    int chChineseStripH   = DEF_CH_CHINESE_STRIP_H;
+    int chChineseInterval = DEF_CH_CHINESE_INTERVAL;
+    int chEnglishY        = DEF_CH_ENGLISH_Y;
 
     // Per-instance Chinese mode flag (set alongside the text children update).
     // Read by src_render() on the render thread without locking.
@@ -226,48 +235,55 @@ static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
                   textW, inst->canvasH - inst->scripTitleH);
 }
 
-// ── Chinese slide child push — Option A (one source per content line) ───────
-// Each content line of pinyin and Chinese chars gets its own text_gdiplus
-// source.  In src_render() each is translated to:
-//   pinyin  line i  →  chPinyinY  + i * chPinyinLineH
-//   chinese line i  →  chChineseY + i * chChineseLineH
-// This gives true pixel-level control over interleave spacing with no
-// blank-line hacks.  Unused line slots are pushed with empty text (invisible).
+// ── Chinese slide child push ──────────────────────────────────────────────────
+// Pinyin: single textbox.  Blank lines are inserted between content lines so
+//   they visually align with the Chinese character strips below.
+// Chinese chars: up to MAX_CH_STRIPS individual strips.
+//   Strip i is rendered at chChineseY + i * chChineseInterval.
 static void updateChineseChildren(LyricsInstance *inst, obs_data_t *s,
                                   const QString &pinyin,
                                   const QString &chinese,
                                   const QString &english)
 {
-    QStringList pyLines = pinyin.isEmpty()
-                          ? QStringList() : pinyin.split('\n');
-    QStringList zhLines = chinese.isEmpty()
-                          ? QStringList() : chinese.split('\n');
+    // Pinyin: add blank lines between content lines for spacing
+    auto addSpacing = [](const QString &text, int sp) -> QString {
+        if (sp <= 0 || text.isEmpty()) return text;
+        QStringList lines = text.split('\n');
+        QStringList result;
+        for (int i = 0; i < lines.size(); ++i) {
+            result << lines[i];
+            if (i < lines.size() - 1)
+                for (int k = 0; k < sp; ++k) result << QString();
+        }
+        return result.join('\n');
+    };
+    pushTextChild(inst->srcPinyin, s, "ch_pinyin_",
+                  addSpacing(pinyin, inst->chPinyinSpacing),
+                  inst->canvasW, inst->chPinyinH);
 
-    for (int i = 0; i < MAX_CH_LINES; ++i) {
-        QString pyText = (i < pyLines.size()) ? pyLines[i] : QString();
+    // Chinese char strips — one per content line
+    QStringList zhLines = chinese.isEmpty() ? QStringList() : chinese.split('\n');
+    for (int i = 0; i < MAX_CH_STRIPS; ++i) {
         QString zhText = (i < zhLines.size()) ? zhLines[i] : QString();
-        pushTextChild(inst->srcPinyinLines[i],  s, "ch_pinyin_",
-                      pyText, inst->canvasW, inst->chPinyinLineH);
-        pushTextChild(inst->srcChineseLines[i], s, "ch_chinese_",
-                      zhText, inst->canvasW, inst->chChineseLineH);
+        pushTextChild(inst->srcChineseStrips[i], s, "ch_chinese_",
+                      zhText, inst->canvasW, inst->chChineseStripH);
     }
 
-    // English translation: placed at absolute chEnglishY
+    // English translation
     int englishH = qMax(0, inst->canvasH - inst->bottomBarH - inst->chEnglishY);
     pushTextChild(inst->srcEnglish, s, "ch_english_", english,
                   inst->canvasW, englishH);
     inst->chineseMode = true;
 }
 
-// Clears all per-line Chinese sources (call when switching to English / clearing).
+// Clears all Chinese sources (call when switching to English / clearing).
 static void clearChineseChildren(LyricsInstance *inst, obs_data_t *s)
 {
-    for (int i = 0; i < MAX_CH_LINES; ++i) {
-        pushTextChild(inst->srcPinyinLines[i],  s, "ch_pinyin_",
-                      QString(), inst->canvasW, inst->chPinyinLineH);
-        pushTextChild(inst->srcChineseLines[i], s, "ch_chinese_",
-                      QString(), inst->canvasW, inst->chChineseLineH);
-    }
+    pushTextChild(inst->srcPinyin, s, "ch_pinyin_",
+                  QString(), inst->canvasW, inst->chPinyinH);
+    for (int i = 0; i < MAX_CH_STRIPS; ++i)
+        pushTextChild(inst->srcChineseStrips[i], s, "ch_chinese_",
+                      QString(), inst->canvasW, inst->chChineseStripH);
     int englishH = qMax(0, inst->canvasH - inst->bottomBarH - inst->chEnglishY);
     pushTextChild(inst->srcEnglish, s, "ch_english_",
                   QString(), inst->canvasW, englishH);
@@ -393,29 +409,22 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->bottomBarH  =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin=(int)obs_data_get_int(settings,"scrip_h_margin");
-    inst->chPinyinLineH  =(int)obs_data_get_int(settings,"ch_pinyin_line_h");
-    inst->chChineseLineH =(int)obs_data_get_int(settings,"ch_chinese_line_h");
-    if(!inst->canvasW)        inst->canvasW       =DEF_CANVAS_W;
-    if(!inst->canvasH)        inst->canvasH       =DEF_CANVAS_H;
-    if(!inst->bottomBarH)     inst->bottomBarH    =DEF_BOTTOM_BAR_H;
-    if(!inst->scripTitleH)    inst->scripTitleH   =DEF_SCRIP_TITLE_H;
-    if(!inst->chPinyinLineH)  inst->chPinyinLineH =DEF_CH_PINYIN_LINE_H;
-    if(!inst->chChineseLineH) inst->chChineseLineH=DEF_CH_CHINESE_LINE_H;
-    // ch_english_y may legitimately be 0 — use has_user_value
-    if (!obs_data_has_user_value(settings,"ch_english_y"))
-        inst->chEnglishY = DEF_CH_ENGLISH_Y;
-    else
-        inst->chEnglishY = (int)obs_data_get_int(settings,"ch_english_y");
-    // ch_pinyin_y / ch_chinese_y may legitimately be 0 — use has_user_value
-    if (!obs_data_has_user_value(settings,"ch_pinyin_y"))
-        inst->chPinyinY  = DEF_CH_PINYIN_Y;
-    else
-        inst->chPinyinY  = (int)obs_data_get_int(settings,"ch_pinyin_y");
-    if (!obs_data_has_user_value(settings,"ch_chinese_y"))
-        inst->chChineseY = DEF_CH_CHINESE_Y;
-    else
-        inst->chChineseY = (int)obs_data_get_int(settings,"ch_chinese_y");
-    // margin may legitimately be 0 — only default if key not found
+    if(!inst->canvasW)     inst->canvasW    =DEF_CANVAS_W;
+    if(!inst->canvasH)     inst->canvasH    =DEF_CANVAS_H;
+    if(!inst->bottomBarH)  inst->bottomBarH =DEF_BOTTOM_BAR_H;
+    if(!inst->scripTitleH) inst->scripTitleH=DEF_SCRIP_TITLE_H;
+    // Y and height values may legitimately be 0 — use has_user_value
+    auto readOrDef = [&](const char *key, int def) -> int {
+        return obs_data_has_user_value(settings,key)
+               ? (int)obs_data_get_int(settings,key) : def;
+    };
+    inst->chPinyinY         = readOrDef("ch_pinyin_y",          DEF_CH_PINYIN_Y);
+    inst->chPinyinH         = readOrDef("ch_pinyin_h",          DEF_CH_PINYIN_H);
+    inst->chPinyinSpacing   = readOrDef("ch_pinyin_spacing",    DEF_CH_PINYIN_SPACING);
+    inst->chChineseY        = readOrDef("ch_chinese_y",         DEF_CH_CHINESE_Y);
+    inst->chChineseStripH   = readOrDef("ch_chinese_strip_h",   DEF_CH_CHINESE_STRIP_H);
+    inst->chChineseInterval = readOrDef("ch_chinese_interval",  DEF_CH_CHINESE_INTERVAL);
+    inst->chEnglishY        = readOrDef("ch_english_y",         DEF_CH_ENGLISH_Y);
     if (!obs_data_has_user_value(settings, "scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
 
@@ -430,16 +439,13 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->srcLyrics     = makeGdi("lyrics_main");
     inst->srcSection    = makeGdi("lyrics_section");
     inst->srcTitle      = makeGdi("lyrics_title");
+    inst->srcPinyin     = makeGdi("ch_pinyin");
     inst->srcEnglish    = makeGdi("ch_english");
     inst->srcScripTitle = makeGdi("scripture_title");
     inst->srcScripText  = makeGdi("scripture_text");
-    // Per-line sources for Chinese mode (Option A)
-    for (int i = 0; i < MAX_CH_LINES; ++i) {
-        inst->srcPinyinLines[i]  = makeGdi(
-            ("ch_py_"  + std::to_string(i)).c_str());
-        inst->srcChineseLines[i] = makeGdi(
-            ("ch_zh_"  + std::to_string(i)).c_str());
-    }
+    for (int i = 0; i < MAX_CH_STRIPS; ++i)
+        inst->srcChineseStrips[i] = makeGdi(
+            ("ch_zh_" + std::to_string(i)).c_str());
 
     // Create OBS built-in fade transition source for media crossfade
     {
@@ -481,13 +487,12 @@ static void src_destroy(void *data)
     obs_source_release(inst->srcLyrics);
     obs_source_release(inst->srcSection);
     obs_source_release(inst->srcTitle);
+    obs_source_release(inst->srcPinyin);
     obs_source_release(inst->srcEnglish);
     obs_source_release(inst->srcScripTitle);
     obs_source_release(inst->srcScripText);
-    for (int i = 0; i < MAX_CH_LINES; ++i) {
-        obs_source_release(inst->srcPinyinLines[i]);
-        obs_source_release(inst->srcChineseLines[i]);
-    }
+    for (int i = 0; i < MAX_CH_STRIPS; ++i)
+        obs_source_release(inst->srcChineseStrips[i]);
     delete inst;
 }
 
@@ -498,11 +503,13 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"bottom_bar_h",  DEF_BOTTOM_BAR_H);
     obs_data_set_default_int(s,"scrip_title_h",  DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
-    obs_data_set_default_int(s,"ch_pinyin_y",      DEF_CH_PINYIN_Y);
-    obs_data_set_default_int(s,"ch_pinyin_line_h", DEF_CH_PINYIN_LINE_H);
-    obs_data_set_default_int(s,"ch_chinese_y",     DEF_CH_CHINESE_Y);
-    obs_data_set_default_int(s,"ch_chinese_line_h",DEF_CH_CHINESE_LINE_H);
-    obs_data_set_default_int(s,"ch_english_y",     DEF_CH_ENGLISH_Y);
+    obs_data_set_default_int(s,"ch_pinyin_y",         DEF_CH_PINYIN_Y);
+    obs_data_set_default_int(s,"ch_pinyin_h",         DEF_CH_PINYIN_H);
+    obs_data_set_default_int(s,"ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
+    obs_data_set_default_int(s,"ch_chinese_y",        DEF_CH_CHINESE_Y);
+    obs_data_set_default_int(s,"ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
+    obs_data_set_default_int(s,"ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
+    obs_data_set_default_int(s,"ch_english_y",        DEF_CH_ENGLISH_Y);
 
     uint32_t white=0x00FFFFFFu,black=0x00000000u;
     uint32_t lgrey=0x00CCCCCCu,mgrey=0x00AAAAAAu;
@@ -622,20 +629,20 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"scrip_title_h", "Scripture: title strip height (px)", 10, 400,1);
     obs_properties_add_int(cgrp,"scrip_h_margin","Scripture: left/right margin (px)",   0, 400,1);
 
-    // ── Chinese interleave layout sub-group (Option A: per-line sources) ─────
-    // Each content line is a separate text_gdiplus source.  Line i is rendered at:
-    //   pinyin  →  ch_pinyin_y  + i × ch_pinyin_line_h
-    //   chinese →  ch_chinese_y + i × ch_chinese_line_h
-    // Tune Y-start and line-height so pinyin and character lines interleave.
+    // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
     obs_properties_add_int(chgrp,"ch_pinyin_y",
         "Pinyin starting Y position (px)", 0, 4320, 1);
-    obs_properties_add_int(chgrp,"ch_pinyin_line_h",
-        "Pinyin line height — text box height & Y-step (px)", 10, 400, 1);
+    obs_properties_add_int(chgrp,"ch_pinyin_h",
+        "Pinyin text box height (px)", 10, 4320, 1);
+    obs_properties_add_int(chgrp,"ch_pinyin_spacing",
+        "Pinyin line spacing (blank lines between lines)", 0, 10, 1);
     obs_properties_add_int(chgrp,"ch_chinese_y",
         "Characters starting Y position (px)", 0, 4320, 1);
-    obs_properties_add_int(chgrp,"ch_chinese_line_h",
-        "Characters line height — text box height & Y-step (px)", 10, 400, 1);
+    obs_properties_add_int(chgrp,"ch_chinese_strip_h",
+        "Characters strip height (px)", 10, 400, 1);
+    obs_properties_add_int(chgrp,"ch_chinese_interval",
+        "Characters strip interval — Y step between strips (px)", 0, 400, 1);
     obs_properties_add_int(chgrp,"ch_english_y",
         "English translation starting Y position (px)", 0, 4320, 1);
     obs_properties_add_group(cgrp,"ch_layout_grp",
@@ -678,26 +685,21 @@ static void src_update(void *data, obs_data_t *settings)
     inst->bottomBarH  =(int)obs_data_get_int(settings,"bottom_bar_h");
     inst->scripTitleH  =(int)obs_data_get_int(settings,"scrip_title_h");
     inst->scripHMargin =(int)obs_data_get_int(settings,"scrip_h_margin");
-    inst->chPinyinLineH  =(int)obs_data_get_int(settings,"ch_pinyin_line_h");
-    inst->chChineseLineH =(int)obs_data_get_int(settings,"ch_chinese_line_h");
-    if(!inst->canvasW)        inst->canvasW       =DEF_CANVAS_W;
-    if(!inst->canvasH)        inst->canvasH       =DEF_CANVAS_H;
-    if(!inst->bottomBarH)     inst->bottomBarH    =DEF_BOTTOM_BAR_H;
-    if(!inst->scripTitleH)    inst->scripTitleH   =DEF_SCRIP_TITLE_H;
-    if(!inst->chPinyinLineH)  inst->chPinyinLineH =DEF_CH_PINYIN_LINE_H;
-    if(!inst->chChineseLineH) inst->chChineseLineH=DEF_CH_CHINESE_LINE_H;
-    if (!obs_data_has_user_value(settings,"ch_pinyin_y"))
-        inst->chPinyinY  = DEF_CH_PINYIN_Y;
-    else
-        inst->chPinyinY  = (int)obs_data_get_int(settings,"ch_pinyin_y");
-    if (!obs_data_has_user_value(settings,"ch_chinese_y"))
-        inst->chChineseY = DEF_CH_CHINESE_Y;
-    else
-        inst->chChineseY = (int)obs_data_get_int(settings,"ch_chinese_y");
-    if (!obs_data_has_user_value(settings,"ch_english_y"))
-        inst->chEnglishY = DEF_CH_ENGLISH_Y;
-    else
-        inst->chEnglishY = (int)obs_data_get_int(settings,"ch_english_y");
+    if(!inst->canvasW)     inst->canvasW    =DEF_CANVAS_W;
+    if(!inst->canvasH)     inst->canvasH    =DEF_CANVAS_H;
+    if(!inst->bottomBarH)  inst->bottomBarH =DEF_BOTTOM_BAR_H;
+    if(!inst->scripTitleH) inst->scripTitleH=DEF_SCRIP_TITLE_H;
+    auto readOrDef2 = [&](const char *key, int def) -> int {
+        return obs_data_has_user_value(settings,key)
+               ? (int)obs_data_get_int(settings,key) : def;
+    };
+    inst->chPinyinY         = readOrDef2("ch_pinyin_y",         DEF_CH_PINYIN_Y);
+    inst->chPinyinH         = readOrDef2("ch_pinyin_h",         DEF_CH_PINYIN_H);
+    inst->chPinyinSpacing   = readOrDef2("ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
+    inst->chChineseY        = readOrDef2("ch_chinese_y",        DEF_CH_CHINESE_Y);
+    inst->chChineseStripH   = readOrDef2("ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
+    inst->chChineseInterval = readOrDef2("ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
+    inst->chEnglishY        = readOrDef2("ch_english_y",        DEF_CH_ENGLISH_Y);
     if(!obs_data_has_user_value(settings,"scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
     QMutexLocker lk(&s_mu);
@@ -755,25 +757,23 @@ static void src_render(void *data, gs_effect_t *effect)
     gs_matrix_pop();
 
     if (inst->chineseMode) {
-        // ── Chinese trilingual layout — Option A (per-line sources) ──
-        // Each content line has its own source rendered at:
-        //   pinyin  line i  →  chPinyinY  + i × chPinyinLineH
-        //   chinese line i  →  chChineseY + i × chChineseLineH
-        // Empty-text sources render nothing, so unused slots are free.
-        for (int i = 0; i < MAX_CH_LINES; ++i) {
-            float pyY = (float)(inst->chPinyinY  + i * inst->chPinyinLineH);
-            gs_matrix_push();
-            gs_matrix_translate3f(0.f, pyY, 0.f);
-            obs_source_video_render(inst->srcPinyinLines[i]);
-            gs_matrix_pop();
+        // ── Chinese trilingual layout ──
+        // Pinyin: single textbox with blank-line spacing
+        gs_matrix_push();
+        gs_matrix_translate3f(0.f, (float)inst->chPinyinY, 0.f);
+        obs_source_video_render(inst->srcPinyin);
+        gs_matrix_pop();
 
-            float zhY = (float)(inst->chChineseY + i * inst->chChineseLineH);
+        // Chinese char strips: strip i at chChineseY + i * chChineseInterval
+        for (int i = 0; i < MAX_CH_STRIPS; ++i) {
+            float zhY = (float)(inst->chChineseY + i * inst->chChineseInterval);
             gs_matrix_push();
             gs_matrix_translate3f(0.f, zhY, 0.f);
-            obs_source_video_render(inst->srcChineseLines[i]);
+            obs_source_video_render(inst->srcChineseStrips[i]);
             gs_matrix_pop();
         }
 
+        // English translation
         gs_matrix_push();
         gs_matrix_translate3f(0.f, (float)inst->chEnglishY, 0.f);
         obs_source_video_render(inst->srcEnglish);
