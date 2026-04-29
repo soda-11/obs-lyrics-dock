@@ -194,7 +194,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     m_sectionTextEdit->setPlaceholderText(
         "Enter lyrics for this section...\n\n"
         "Blank line = slide boundary.");
-    m_sectionTextEdit->setFontFamily("Courier New");
+    m_sectionTextEdit->setFont(QFont("Courier New", 10));
     col1L->addWidget(m_col1Label);
     col1L->addWidget(m_sectionTextEdit, 1);
 
@@ -207,7 +207,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *pinyinHint = new QLabel("1 pinyin line per Chinese line.\nBlank line = slide boundary.");
     pinyinHint->setStyleSheet("font-size:8px;color:#666;");
     m_pinyinEdit = new QTextEdit;
-    m_pinyinEdit->setFontFamily("Courier New");
+    m_pinyinEdit->setFont(QFont("Courier New", 10));
     col2L->addWidget(pinyinLbl);
     col2L->addWidget(pinyinHint);
     col2L->addWidget(m_pinyinEdit, 1);
@@ -222,7 +222,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *englishHint = new QLabel("May have more lines than Chinese.\nBlank line = slide boundary.");
     englishHint->setStyleSheet("font-size:8px;color:#666;");
     m_englishEdit = new QTextEdit;
-    m_englishEdit->setFontFamily("Courier New");
+    m_englishEdit->setFont(QFont("Courier New", 10));
     col3L->addWidget(englishLbl);
     col3L->addWidget(englishHint);
     col3L->addWidget(m_englishEdit, 1);
@@ -263,7 +263,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *lyricsHdr   = new QLabel("Lyrics ([Section] format):");
     lyricsHdr->setStyleSheet("font-size:9px;color:#aaa;");
     m_quickPasteEdit  = new QTextEdit;
-    m_quickPasteEdit->setFontFamily("Courier New");
+    m_quickPasteEdit->setFont(QFont("Courier New", 10));
     lyricsColL->addWidget(lyricsHdr);
     lyricsColL->addWidget(m_quickPasteEdit, 1);
 
@@ -273,7 +273,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *pinyinHdr   = new QLabel("Pinyin (auto-generated / editable):");
     pinyinHdr->setStyleSheet("font-size:9px;color:#aaa;");
     m_qpPinyinEdit    = new QTextEdit;
-    m_qpPinyinEdit->setFontFamily("Courier New");
+    m_qpPinyinEdit->setFont(QFont("Courier New", 10));
     m_qpPinyinEdit->setPlaceholderText(
         "Pinyin will appear here after clicking \"Generate Pinyin\".\n"
         "You may edit individual lines before importing.");
