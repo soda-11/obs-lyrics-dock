@@ -1,7 +1,9 @@
-// song-edit-dialog.cpp  v10.0
+// song-edit-dialog.cpp  v10.1
 // Trilingual section editor: Block 1 = Chinese/English lyrics,
 // Block 2 = Pinyin (optional), Block 3 = English translation (optional).
+// Quick Paste tab: side-by-side lyrics + pinyin with auto-generate.
 #include "song-edit-dialog.hpp"
+#include "pinyin-engine.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -242,20 +244,98 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     // ── Tab 2: Quick Paste ────────────────────────────────────
     auto *qpWidget = new QWidget;
     auto *qpLayout = new QVBoxLayout(qpWidget);
-    auto *qpHint   = new QLabel(
-        "Current song in [Section] format — edit here and click Import, "
-        "or paste new lyrics:");
+    qpLayout->setContentsMargins(6,6,6,6);
+    qpLayout->setSpacing(4);
+
+    // Hint row
+    auto *qpHint = new QLabel(
+        "Paste lyrics in [Section] format below. "
+        "For Chinese songs, check the box and click Generate Pinyin.");
     qpHint->setWordWrap(true);
     qpHint->setStyleSheet("color:#aaa;font-size:9px;");
-    m_quickPasteEdit = new QTextEdit;
+    qpLayout->addWidget(qpHint);
+
+    // Side-by-side text boxes
+    auto *qpBoxRow    = new QHBoxLayout;
+    auto *lyricsCol   = new QWidget;
+    auto *lyricsColL  = new QVBoxLayout(lyricsCol);
+    lyricsColL->setContentsMargins(0,0,0,0);
+    auto *lyricsHdr   = new QLabel("Lyrics ([Section] format):");
+    lyricsHdr->setStyleSheet("font-size:9px;color:#aaa;");
+    m_quickPasteEdit  = new QTextEdit;
     m_quickPasteEdit->setFontFamily("Courier New");
-    m_quickPasteBtn  = new QPushButton("Import Lyrics from Above");
+    lyricsColL->addWidget(lyricsHdr);
+    lyricsColL->addWidget(m_quickPasteEdit, 1);
+
+    auto *pinyinCol   = new QWidget;
+    auto *pinyinColL  = new QVBoxLayout(pinyinCol);
+    pinyinColL->setContentsMargins(0,0,0,0);
+    auto *pinyinHdr   = new QLabel("Pinyin (auto-generated / editable):");
+    pinyinHdr->setStyleSheet("font-size:9px;color:#aaa;");
+    m_qpPinyinEdit    = new QTextEdit;
+    m_qpPinyinEdit->setFontFamily("Courier New");
+    m_qpPinyinEdit->setPlaceholderText(
+        "Pinyin will appear here after clicking \"Generate Pinyin\".\n"
+        "You may edit individual lines before importing.");
+    pinyinColL->addWidget(pinyinHdr);
+    pinyinColL->addWidget(m_qpPinyinEdit, 1);
+    pinyinCol->setVisible(false); // shown only when Chinese checked
+
+    qpBoxRow->addWidget(lyricsCol,  1);
+    qpBoxRow->addSpacing(4);
+    qpBoxRow->addWidget(pinyinCol,  1);
+    qpLayout->addLayout(qpBoxRow, 1);
+
+    // Button row: [✓ Chinese Song] [Generate Pinyin]  ──  [Import]
+    auto *qpBtnRow = new QHBoxLayout;
+    m_qpChineseCheck  = new QCheckBox("Chinese Song");
+    m_qpChineseCheck->setToolTip(
+        "Check this when the pasted lyrics are in Chinese.\n"
+        "Enables the pinyin column and Generate Pinyin button.");
+    m_qpGenPinyinBtn  = new QPushButton("Generate Pinyin");
+    m_qpGenPinyinBtn->setIcon(
+        style()->standardIcon(QStyle::SP_BrowserReload));
+    m_qpGenPinyinBtn->setEnabled(false);
+    m_qpGenPinyinBtn->setToolTip(
+        "Generate plain ASCII pinyin from the lyrics on the left.\n"
+        "Existing pinyin will be cleared and regenerated.");
+    m_quickPasteBtn   = new QPushButton("Import");
     m_quickPasteBtn->setIcon(
         style()->standardIcon(QStyle::SP_DialogApplyButton));
-    qpLayout->addWidget(qpHint);
-    qpLayout->addWidget(m_quickPasteEdit);
-    qpLayout->addWidget(m_quickPasteBtn);
+    m_quickPasteBtn->setDefault(false);
+
+    qpBtnRow->addWidget(m_qpChineseCheck);
+    qpBtnRow->addSpacing(8);
+    qpBtnRow->addWidget(m_qpGenPinyinBtn);
+    qpBtnRow->addStretch();
+    qpBtnRow->addWidget(m_quickPasteBtn);
+    qpLayout->addLayout(qpBtnRow);
+
     tabs->addTab(qpWidget, "Quick Paste");
+
+    // Connect Quick Paste tab signals
+    connect(m_qpChineseCheck, &QCheckBox::toggled, this, [pinyinCol, this](bool on){
+        pinyinCol->setVisible(on);
+        m_qpGenPinyinBtn->setEnabled(on);
+    });
+    connect(m_qpGenPinyinBtn, &QPushButton::clicked, this, [this](){
+        // Extract only the lyric lines (strip [Section] headers and blanks)
+        // then run through PinyinEngine, preserving blank-line boundaries.
+        QString raw = m_quickPasteEdit->toPlainText();
+        // Rebuild a version with section headers replaced by blank lines
+        // so the line-count structure is preserved for the pinyin box.
+        QStringList inLines  = raw.split('\n');
+        QStringList chLines; // lines fed to engine (headers → blank)
+        for (const QString &ln : inLines) {
+            QString t = ln.trimmed();
+            if (t.startsWith('[') && t.endsWith(']'))
+                chLines << QString(); // header → blank so pinyin aligns
+            else
+                chLines << ln;
+        }
+        QString pinyin = PinyinEngine::generate(chLines.join('\n'));
+        m_qpPinyinEdit->setPlainText(pinyin);
+    });
 
     // Custom save buttons
     auto *btnBox     = new QHBoxLayout;
@@ -311,14 +391,31 @@ void SongEditDialog::buildUi(int initialSectionIndex)
 
 void SongEditDialog::syncQuickPasteFromSections()
 {
-    // Build [Label]\ntext representation of current sections (English text only)
-    QString out;
+    // Detect if any section is Chinese
+    bool hasChinese = std::any_of(m_song.sections.begin(), m_song.sections.end(),
+                                  [](const LyricsSection &s){ return s.isChinese; });
+
+    // Block signals to avoid toggled() firing and hiding/showing the pinyin column
+    // before we finish populating both boxes.
+    m_qpChineseCheck->blockSignals(true);
+    m_qpChineseCheck->setChecked(hasChinese);
+    m_qpChineseCheck->blockSignals(false);
+    // Manually fire the visibility toggle
+    m_qpChineseCheck->toggled(hasChinese); // triggers the lambda connected above
+
+    QString lyricsOut, pinyinOut;
     for (const auto &sec : m_song.sections) {
         QString lbl = sec.label.isEmpty()
                       ? sectionTypeLabel(sec.type) : sec.label;
-        out += "[" + lbl + "]\n" + sec.text.trimmed() + "\n\n";
+        lyricsOut += "[" + lbl + "]\n" + sec.text.trimmed() + "\n\n";
+        if (hasChinese)
+            pinyinOut += "\n" + sec.pinyin.trimmed() + "\n\n";
     }
-    m_quickPasteEdit->setPlainText(out.trimmed());
+    m_quickPasteEdit->setPlainText(lyricsOut.trimmed());
+    if (hasChinese)
+        m_qpPinyinEdit->setPlainText(pinyinOut.trimmed());
+    else
+        m_qpPinyinEdit->clear();
 }
 
 bool SongEditDialog::checkDuplicateTitle(const QString &title)
@@ -558,8 +655,48 @@ void SongEditDialog::onQuickPasteClicked()
     QString raw = m_quickPasteEdit->toPlainText().trimmed();
     if (raw.isEmpty()) return;
     saveCurrentSection();
-    Song parsed = SongManager::parseQuickLyrics(m_titleEdit->text(), raw);
+
+    bool isChinese = m_qpChineseCheck->isChecked();
+    Song parsed    = SongManager::parseQuickLyrics(m_titleEdit->text(), raw);
     m_song.sections = parsed.sections;
+
+    // If Chinese mode: distribute pinyin lines to each section.
+    // The pinyin box mirrors the lyrics box structure:
+    //   section headers → blank line, lyric lines → pinyin lines, same blank-line boundaries.
+    if (isChinese && !m_qpPinyinEdit->toPlainText().trimmed().isEmpty()) {
+        // Rebuild the lyrics-box line list, recording which lines are headers
+        // and which belong to which section (same logic as parseQuickLyrics).
+        QStringList lyricsLines = m_quickPasteEdit->toPlainText().split('\n');
+        QStringList pinyinLines = m_qpPinyinEdit->toPlainText().split('\n');
+
+        // Walk both lists in parallel, collecting pinyin per section.
+        // Headers in the lyrics box map to blank lines in the pinyin box.
+        QList<QStringList> secPinyin(m_song.sections.size());
+        int secIdx = -1;
+        int pyIdx  = 0;
+        for (int li = 0; li < lyricsLines.size(); ++li) {
+            QString lt = lyricsLines[li].trimmed();
+            if (lt.startsWith('[') && lt.endsWith(']')) {
+                ++secIdx;
+                // Corresponding pinyin line (should be blank) — advance past it
+                if (pyIdx < pinyinLines.size()) ++pyIdx;
+            } else {
+                if (secIdx >= 0 && secIdx < m_song.sections.size()
+                    && pyIdx < pinyinLines.size()) {
+                    secPinyin[secIdx] << pinyinLines[pyIdx];
+                }
+                if (pyIdx < pinyinLines.size()) ++pyIdx;
+            }
+        }
+
+        // Apply pinyin + Chinese flags to each section
+        for (int i = 0; i < m_song.sections.size(); ++i) {
+            m_song.sections[i].isChinese       = true;
+            m_song.sections[i].showPinyin      = true;
+            m_song.sections[i].pinyin          = secPinyin[i].join('\n');
+        }
+    }
+
     populateSectionList();
     if (!m_song.sections.isEmpty()) m_sectionList->setCurrentRow(0);
     syncQuickPasteFromSections();

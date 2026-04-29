@@ -82,6 +82,10 @@ private:
     QWidget   *m_englishWidget;       // block 3 container (hidden in English mode)
     QTextEdit *m_englishEdit;         // Block 3: English translation
 
-    QTextEdit          *m_quickPasteEdit;
-    QPushButton        *m_quickPasteBtn;
+    // ── Quick Paste tab ────────────────────────────────────────
+    QCheckBox          *m_qpChineseCheck  = nullptr; // "Chinese Song" toggle
+    QTextEdit          *m_quickPasteEdit  = nullptr; // left: lyrics with [Section] headers
+    QTextEdit          *m_qpPinyinEdit    = nullptr; // right: pinyin (visible in Chinese mode)
+    QPushButton        *m_qpGenPinyinBtn  = nullptr; // Generate Pinyin button
+    QPushButton        *m_quickPasteBtn   = nullptr; // Import button
 };

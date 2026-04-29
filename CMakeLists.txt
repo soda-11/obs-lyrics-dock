@@ -27,6 +27,7 @@ set(PLUGIN_SOURCES
     src/color-preset-button.cpp  src/color-preset-button.hpp
     src/websocket-server.cpp     src/websocket-server.hpp
     src/settings-dialog.cpp      src/settings-dialog.hpp
+    src/pinyin-engine.cpp        src/pinyin-engine.hpp
 )
 
 add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})
@@ -53,4 +54,4 @@ if(WIN32)
         DESTINATION "data/obs-plugins/obs-lyrics-dock")
 endif()
 
-message(STATUS "obs-lyrics-dock v10.0.0 configured")
+message(STATUS "obs-lyrics-dock v10.1.0 configured")
