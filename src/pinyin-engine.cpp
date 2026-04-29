@@ -10,27 +10,32 @@
 
 namespace {
 
-// Override table: pinyin that differs from Unihan OR needs initial cap.
-// Checked before the Unihan table. cap=true → first letter uppercased.
-struct Override { uint32_t cp; const char *py; bool cap; };
-static const Override kOverrides[] = {
-    {0x534E, "hua",   true},  // 华 → Hua   (耶和华)
-    {0x548C, "he",    true},  // 和 → He    (耶和华)
-    {0x5723, "sheng", true},  // 圣 → Sheng
-    {0x7962, "Ni",    true},  // 祢 → Ni    (worship "You"; Unihan gives "mi")
-    {0x795E, "shen",  true},  // 神 → Shen
-    {0x7A4C, "Su",    true},  // 穌 → Su    (traditional 耶穌)
-    {0x7A63, "Su",    true},  // 稣 → Su    (simplified 耶稣; Unihan gives "rang")
-    {0x8036, "Ye",    true},  // 耶 → Ye
-};
-static constexpr int kOverrideSize = static_cast<int>(sizeof(kOverrides) / sizeof(kOverrides[0]));
-
-// Returns override entry or nullptr.
-static const Override *findOverride(uint32_t cp)
+// Override lookup via switch — O(1), compiler-optimised jump table.
+// Returns the correct pinyin string (already capitalised where required)
+// or nullptr if this character has no override.
+//
+// Characters covered:
+//   华 U+534E → Hua   耶和华
+//   和 U+548C → He    耶和华
+//   圣 U+5723 → Sheng
+//   祢 U+7962 → Ni    worship "You" (Unihan gives "mi")
+//   神 U+795E → Shen
+//   穌 U+7A4C → Su    traditional 耶穌  (Unihan "su" – correct syllable but needs cap)
+//   稣 U+7A63 → Su    simplified  耶稣  (Unihan "rang" – wrong reading entirely)
+//   耶 U+8036 → Ye
+static const char *overridePinyin(uint32_t cp)
 {
-    for (int i = 0; i < kOverrideSize; ++i)
-        if (kOverrides[i].cp == cp) return &kOverrides[i];
-    return nullptr;
+    switch (cp) {
+        case 0x534E: return "Hua";
+        case 0x548C: return "He";
+        case 0x5723: return "Sheng";
+        case 0x7962: return "Ni";
+        case 0x795E: return "Shen";
+        case 0x7A4C: return "Su";   // 穌 traditional — Unihan "su" lacks capital
+        case 0x7A63: return "Su";   // 稣 simplified  — Unihan "rang" is wrong
+        case 0x8036: return "Ye";
+        default:     return nullptr;
+    }
 }
 
 // Returns Unihan pinyin (no override, no cap).
@@ -75,13 +80,13 @@ QString generate(const QString &chineseText)
             uint32_t cp = static_cast<uint32_t>(ch.unicode());
             if (isCJKPunctuation(cp)) continue;
 
-            const Override *ov = findOverride(cp);
-            const char *raw = ov ? ov->py : unihanPinyin(cp);
+            // Override table is checked first (switch → jump table, no linear scan).
+            // Overridden strings already carry the correct capitalisation.
+            const char *raw = overridePinyin(cp);
+            if (!raw) raw = unihanPinyin(cp);   // fallback: Unihan (lowercase)
+
             if (raw && *raw) {
-                QString s = QString::fromLatin1(raw);
-                if (ov && ov->cap)
-                    s[0] = s[0].toUpper();
-                tokens << s;
+                tokens << QString::fromLatin1(raw);
             } else if (cp < 0x2E80) {
                 // ASCII / Latin: pass through (numbers, English, punctuation)
                 tokens << QString(ch);
