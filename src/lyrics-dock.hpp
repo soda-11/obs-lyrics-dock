@@ -160,7 +160,7 @@ private:
     QLabel         *m_cardWidthLabel   = nullptr;
     QToolButton    *m_cardWidthOutBtn  = nullptr;
     QToolButton    *m_cardWidthInBtn   = nullptr;
-    int             m_cardWidthScale   = 100;     // 100/110/120/130/140/150 %
+    int             m_cardWidthScale   = 30;      // 10/20/…/100 % of viewport width
 
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;

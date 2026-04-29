@@ -609,13 +609,13 @@ void LyricsDock::loadState()
         }
     }
 
-    // Restore card-width slider (range 100–150, step 10)
-    int cws = doc.object()["cardWidthScale"].toInt(100);
-    cws = qBound(100, (cws / 10) * 10, 150);
+    // Restore card-width slider (range 10–100 %, step 10, default 30)
+    int cws = doc.object()["cardWidthScale"].toInt(30);
+    cws = qBound(10, (cws / 10) * 10, 100);
     m_cardWidthScale = cws;
     if (m_cardWidthSlider) {
         QSignalBlocker blk(m_cardWidthSlider);
-        m_cardWidthSlider->setValue((cws - 90) / 10); // 100→1, …, 150→6
+        m_cardWidthSlider->setValue(cws / 10); // 10→1, 30→3, 100→10
     }
     if (m_cardWidthLabel)
         m_cardWidthLabel->setText(QString("%1%").arg(cws));
@@ -882,29 +882,30 @@ void LyricsDock::buildUi()
     m_slideFontCombo->setToolTip("Font displayed on slide cards (display only)");
     m_slideFontCombo->setEditable(false);
 
-    // Card Width controls (on same bar as font/zoom)
+    // Card Width controls — range 10 %–100 % of panel width, default 30 %
     auto *wLbl = new QLabel("W:");
     wLbl->setStyleSheet("color:#888;font-size:9px;");
-    wLbl->setToolTip("Slide card width (100% – 150% of base size)");
+    wLbl->setToolTip("Card width as % of slide panel (10 % – 100 %)");
 
     m_cardWidthOutBtn = new QToolButton;
     m_cardWidthOutBtn->setText("-");
     m_cardWidthOutBtn->setToolTip("Narrower cards");
 
     m_cardWidthSlider = new QSlider(Qt::Horizontal);
-    m_cardWidthSlider->setRange(1, 6);   // 1=100%, 2=110%, … 6=150%
-    m_cardWidthSlider->setValue(1);      // default 100%
+    m_cardWidthSlider->setRange(1, 10);  // 1=10 %, 2=20 %, … 10=100 %
+    m_cardWidthSlider->setValue(3);      // default 30 %
     m_cardWidthSlider->setFixedWidth(80);
-    m_cardWidthSlider->setToolTip("Card width: 100% – 150% of base size");
+    m_cardWidthSlider->setToolTip("Card width: 10 % – 100 % of panel");
 
     m_cardWidthInBtn = new QToolButton;
     m_cardWidthInBtn->setText("+");
     m_cardWidthInBtn->setToolTip("Wider cards");
 
-    m_cardWidthLabel = new QLabel("100%");
+    m_cardWidthLabel = new QLabel("30%");
     m_cardWidthLabel->setFixedWidth(38);
     m_cardWidthLabel->setStyleSheet("color: #888; font-size: 9px;");
 
+    // Layout order: nav | stretch | zoom(−slider+label) | W(−slider+label) | Font
     ctrlL->addWidget(m_prevBtn);
     ctrlL->addWidget(m_slideCounter);
     ctrlL->addWidget(m_nextBtn);
@@ -913,15 +914,15 @@ void LyricsDock::buildUi()
     ctrlL->addWidget(m_zoomSlider);
     ctrlL->addWidget(m_zoomInBtn);
     ctrlL->addWidget(m_zoomLabel);
-    ctrlL->addSpacing(6);
-    ctrlL->addWidget(fontLbl);
-    ctrlL->addWidget(m_slideFontCombo);
-    ctrlL->addSpacing(6);
+    ctrlL->addSpacing(4);
     ctrlL->addWidget(wLbl);
     ctrlL->addWidget(m_cardWidthOutBtn);
     ctrlL->addWidget(m_cardWidthSlider);
     ctrlL->addWidget(m_cardWidthInBtn);
     ctrlL->addWidget(m_cardWidthLabel);
+    ctrlL->addSpacing(6);
+    ctrlL->addWidget(fontLbl);
+    ctrlL->addWidget(m_slideFontCombo);
 
     slidesPanelL->addWidget(m_slideArea, 1);
     slidesPanelL->addWidget(ctrlBar);
@@ -1026,7 +1027,7 @@ void LyricsDock::buildUi()
     // Card-width slider — rebuild grid with new column count, reflow heights
     connect(m_cardWidthSlider, &QSlider::valueChanged,
             this, [this](int v) {
-                m_cardWidthScale = 90 + v * 10;  // 1→100, 2→110, …, 6→150
+                m_cardWidthScale = v * 10;   // 1→10 %, 3→30 %, 10→100 %
                 m_cardWidthLabel->setText(QString("%1%").arg(m_cardWidthScale));
                 int prevActive = m_activeSlide;
                 if (!m_currentSong.id.isEmpty())
@@ -1036,10 +1037,10 @@ void LyricsDock::buildUi()
                 saveState();
             });
     connect(m_cardWidthOutBtn, &QToolButton::clicked, this, [this](){
-        m_cardWidthSlider->setValue(qMax(1, m_cardWidthSlider->value() - 1));
+        m_cardWidthSlider->setValue(qMax(1,  m_cardWidthSlider->value() - 1));
     });
     connect(m_cardWidthInBtn, &QToolButton::clicked, this, [this](){
-        m_cardWidthSlider->setValue(qMin(6, m_cardWidthSlider->value() + 1));
+        m_cardWidthSlider->setValue(qMin(10, m_cardWidthSlider->value() + 1));
     });
 
     // Lines-per-slide spinbox: rebuild slides when value changes
@@ -1162,8 +1163,10 @@ void LyricsDock::applyZoomToAll()
 {
     if (m_slideButtons.isEmpty()) return;
 
-    // Card width = BASE_W(200) × (m_cardWidthScale / 100).
-    int fixedW = qMax(80, (int)(200 * m_cardWidthScale / 100.0));
+    // Card width = m_cardWidthScale % of the visible viewport width.
+    int vpw    = m_slideArea->viewport()->width() - 16; // subtract L+R margins
+    if (vpw < 80) vpw = 580;                            // fallback before shown
+    int fixedW = qMax(80, vpw * m_cardWidthScale / 100);
 
     // Pass 1 — apply styles and let each card compute its own preferred height.
     for (auto *b : m_slideButtons)
@@ -1198,11 +1201,11 @@ void LyricsDock::clearSlideGrid()
 void LyricsDock::loadSongSlides(const Song &song)
 {
     clearSlideGrid();
-    // Columns = how many cards fit in the viewport.
-    // Card width = BASE_W(200) × (m_cardWidthScale / 100).  Add 8 px for spacing.
-    const int colVpw  = qMax(80, m_slideArea->viewport()->width() - 16);
-    const int colCardW = qMax(80, (int)(200 * m_cardWidthScale / 100.0));
-    const int cols    = qMax(1, colVpw / (colCardW + 8));
+    // Columns = how many cards fit across the viewport.
+    // Card width = m_cardWidthScale % of visible viewport; add 8 px for spacing.
+    const int colVpw   = qMax(80, m_slideArea->viewport()->width() - 16);
+    const int colCardW = qMax(80, colVpw * m_cardWidthScale / 100);
+    const int cols     = qMax(1, colVpw / (colCardW + 8));
     int row = 0, col = 0, globalIdx = 0;
 
     for (int si = 0; si < song.sections.size(); ++si) {
