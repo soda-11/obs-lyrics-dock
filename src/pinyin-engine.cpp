@@ -17,10 +17,11 @@ static const Override kOverrides[] = {
     {0x534E, "hua",   true},  // 华 → Hua   (耶和华)
     {0x548C, "he",    true},  // 和 → He    (耶和华)
     {0x5723, "sheng", true},  // 圣 → Sheng
-    {0x7962, "ni",    true},  // 祢 → Ni    (worship "You"; Unihan gives "mi")
+    {0x7962, "Ni",    true},  // 祢 → Ni    (worship "You"; Unihan gives "mi")
     {0x795E, "shen",  true},  // 神 → Shen
-    {0x7A63, "su",    true},  // 稣 → Su    (耶稣; Unihan gives "rang")
-    {0x8036, "ye",    true},  // 耶 → Ye
+    {0x7A4C, "Su",    true},  // 穌 → Su    (traditional 耶穌)
+    {0x7A63, "Su",    true},  // 稣 → Su    (simplified 耶稣; Unihan gives "rang")
+    {0x8036, "Ye",    true},  // 耶 → Ye
 };
 static constexpr int kOverrideSize = static_cast<int>(sizeof(kOverrides) / sizeof(kOverrides[0]));
 
