@@ -28,6 +28,7 @@ set(PLUGIN_SOURCES
     src/websocket-server.cpp     src/websocket-server.hpp
     src/settings-dialog.cpp      src/settings-dialog.hpp
     src/pinyin-engine.cpp        src/pinyin-engine.hpp
+                                 src/pinyin-table.hpp
 )
 
 add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})
