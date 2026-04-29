@@ -7,54 +7,74 @@
 #include <QPainterPath>
 #include <QPolygonF>
 
-// ── Pen / Edit icon ───────────────────────────────────────────────────────────
-// Diagonal pen pointing bottom-left: cap → body → golden nib → ink tip.
+// ── Edit icon ─────────────────────────────────────────────────────────────────
+// Rounded-rectangle notepad (light blue) with a diagonal pencil overlaid:
+//   green rounded eraser cap → red barrel → skin-tone triangular nib.
+// Thick black outlines throughout, matching common flat-icon style.
 inline QIcon makePenIcon()
 {
-    const int SZ = 32;
+    const int SZ = 64;   // draw at 2× for crispness, downscale later
     QPixmap px(SZ, SZ);
     px.fill(Qt::transparent);
     QPainter p(&px);
     p.setRenderHint(QPainter::Antialiasing);
 
-    // Coordinate system: centre the pen, rotate -45° so nib faces bottom-left.
-    p.translate(SZ / 2.0, SZ / 2.0);
-    p.rotate(-45.0);
+    // ── Rounded-rectangle background ────────────────────────────────────────
+    const QColor bgFill(223, 229, 243);   // light periwinkle-blue
+    const QColor bgBorder(20, 20, 20);
+    p.setPen(QPen(bgBorder, 4.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(bgFill);
+    p.drawRoundedRect(QRectF(4, 10, 50, 50), 9, 9);
 
-    const int hw = 3;   // half-width of pen barrel
+    // ── Pencil (drawn at -45°, nib pointing bottom-left) ────────────────────
+    // We translate to pencil centre and rotate.
+    p.save();
+    p.translate(38, 26);   // anchor near top-right area
+    p.rotate(45.0);        // rotate so nib faces bottom-left of canvas
 
-    // ── Eraser / cap (top) ───────────────────
-    const QColor capFill(155, 160, 172);
-    p.setPen(QPen(capFill.darker(160), 0.8));
+    const qreal hw  = 5.5;   // half-width of barrel
+    const QPen  outline(QColor(20, 20, 20), 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+
+    // Eraser cap — green, rounded top
+    const QColor capFill(62, 188, 128);
+    p.setPen(outline);
     p.setBrush(capFill);
-    p.drawRect(-hw, -15, hw * 2, 4);
+    QPainterPath capPath;
+    capPath.moveTo(-hw, -22);
+    capPath.lineTo( hw, -22);
+    capPath.arcTo(QRectF(-hw, -30, hw * 2, 16), 0, 180);
+    capPath.closeSubpath();
+    p.drawPath(capPath);
 
-    // ── Ferrule (metal ring) ─────────────────
+    // Ferrule — dark band between cap and barrel
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(125, 130, 142));
-    p.drawRect(-hw, -11, hw * 2, 2);
+    p.setBrush(QColor(30, 30, 30));
+    p.drawRect(QRectF(-hw, -14, hw * 2, 3.5));
 
-    // ── Barrel ──────────────────────────────
-    const QColor barrelFill(200, 205, 215);
-    p.setPen(QPen(barrelFill.darker(145), 0.8));
+    // Barrel — red
+    const QColor barrelFill(224, 60, 80);
+    p.setPen(outline);
     p.setBrush(barrelFill);
-    p.drawRect(-hw, -9, hw * 2, 14);
+    p.drawRect(QRectF(-hw, -10.5, hw * 2, 22));
 
-    // ── Nib (golden triangle) ────────────────
-    const QColor nibFill(225, 178, 48);
+    // Nib — skin-tone triangle
+    const QColor nibFill(248, 203, 160);
     QPolygonF nib;
-    nib << QPointF(-hw, 5) << QPointF(hw, 5) << QPointF(0, 13);
-    p.setPen(QPen(nibFill.darker(160), 0.8));
+    nib << QPointF(-hw, 11.5) << QPointF(hw, 11.5) << QPointF(0, 23);
+    p.setPen(outline);
     p.setBrush(nibFill);
     p.drawPolygon(nib);
 
-    // ── Ink dot at very tip ──────────────────
+    // Tip dot — dark
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(35, 35, 35));
-    p.drawEllipse(QPointF(0, 13), 1.4, 1.4);
+    p.setBrush(QColor(30, 30, 30));
+    p.drawEllipse(QPointF(0, 23), 2.0, 2.0);
 
+    p.restore();
     p.end();
-    return QIcon(px);
+
+    // Scale down to 32×32 for the actual icon
+    return QIcon(px.scaled(32, 32, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 // ── Duplicate / Copy icon ─────────────────────────────────────────────────────
