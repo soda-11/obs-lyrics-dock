@@ -1,9 +1,10 @@
-// song-edit-dialog.cpp  v10.1
+// song-edit-dialog.cpp  v10.2
 // Trilingual section editor: Block 1 = Chinese/English lyrics,
 // Block 2 = Pinyin (optional), Block 3 = English translation (optional).
 // Quick Paste tab: side-by-side lyrics + pinyin with auto-generate.
 #include "song-edit-dialog.hpp"
 #include "pinyin-engine.hpp"
+#include "icon-helpers.hpp"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -105,8 +106,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     m_removeSectionBtn->setIcon(
         style()->standardIcon(QStyle::SP_TrashIcon));
     m_removeSectionBtn->setToolTip("Remove section");
-    m_duplicateSectionBtn->setIcon(
-        style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+    m_duplicateSectionBtn->setIcon(makeDuplicateIcon());
     m_duplicateSectionBtn->setToolTip("Duplicate section");
     m_moveSectionUpBtn->setIcon(
         style()->standardIcon(QStyle::SP_ArrowUp));

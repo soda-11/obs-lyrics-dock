@@ -1,9 +1,10 @@
-// lyrics-dock.cpp  v10.0
+// lyrics-dock.cpp  v10.1
 #include "lyrics-dock.hpp"
 #include "song-edit-dialog.hpp"
 #include "media-gallery.hpp"
 #include "scripture-tab.hpp"
 #include "color-preset-button.hpp"
+#include "icon-helpers.hpp"
 
 #include "lyrics-renderer.hpp"
 #include "settings-dialog.hpp"
@@ -144,7 +145,7 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
             style()->standardIcon(QStyle::SP_TrashIcon), "Remove from Sequence");
         menu.addSeparator();
         auto *editAct   = menu.addAction(
-            style()->standardIcon(QStyle::SP_FileDialogDetailedView), "Edit Song");
+            makePenIcon(), "Edit Song");
 
         addAct->setEnabled(!inSeq);
         removeAct->setEnabled(inSeq);
@@ -406,7 +407,7 @@ void SlideButton::contextMenuEvent(QContextMenuEvent *e)
 {
     QMenu menu(this);
     auto *editAct = menu.addAction(
-        style()->standardIcon(QStyle::SP_FileDialogDetailedView),
+        makePenIcon(),
         "Edit this section...");
     if (menu.exec(e->globalPos()) == editAct)
         emit editRequested(m_sectionIdx);
@@ -681,7 +682,7 @@ void LyricsDock::buildUi()
     m_seqDownBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
     m_seqDownBtn->setToolTip("Move down");
     m_seqEditBtn->setIcon(
-        style()->standardIcon(QStyle::SP_FileDialogDetailedView));
+        makePenIcon());
     m_seqEditBtn->setToolTip("Edit song");
 
     for (auto *b : { m_removeFromSeqBtn, m_seqUpBtn,
@@ -1339,7 +1340,7 @@ void LyricsDock::onSequenceContextMenu(const QPoint &pos)
         style()->standardIcon(QStyle::SP_TrashIcon),
         "Remove from Sequence");
     auto *editAct = menu.addAction(
-        style()->standardIcon(QStyle::SP_FileDialogDetailedView),
+        makePenIcon(),
         "Edit Song");
 
     auto *chosen = menu.exec(m_sequenceList->viewport()->mapToGlobal(pos));
