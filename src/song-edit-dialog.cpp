@@ -409,7 +409,7 @@ void SongEditDialog::syncQuickPasteFromSections()
                       ? sectionTypeLabel(sec.type) : sec.label;
         lyricsOut += "[" + lbl + "]\n" + sec.text.trimmed() + "\n\n";
         if (hasChinese)
-            pinyinOut += "\n" + sec.pinyin.trimmed() + "\n\n";
+            pinyinOut += sec.pinyin.trimmed() + "\n\n";
     }
     m_quickPasteEdit->setPlainText(lyricsOut.trimmed());
     if (hasChinese)
@@ -661,45 +661,45 @@ void SongEditDialog::onQuickPasteClicked()
     m_song.sections = parsed.sections;
 
     // If Chinese mode: distribute pinyin lines to each section.
-    // The pinyin box mirrors the lyrics box structure:
-    //   section headers → blank line, lyric lines → pinyin lines, same blank-line boundaries.
+    // The pinyin box uses blank lines as section separators (one group per section,
+    // in the same order as the [Section] headers in the lyrics box).
+    // This group-based approach is immune to re-import drift: it never depends on
+    // a per-header blank placeholder, so pressing Import multiple times is safe.
     if (isChinese && !m_qpPinyinEdit->toPlainText().trimmed().isEmpty()) {
-        // Rebuild the lyrics-box line list, recording which lines are headers
-        // and which belong to which section (same logic as parseQuickLyrics).
-        QStringList lyricsLines = m_quickPasteEdit->toPlainText().split('\n');
-        QStringList pinyinLines = m_qpPinyinEdit->toPlainText().split('\n');
-
-        // Walk both lists in parallel, collecting pinyin per section.
-        // Headers in the lyrics box map to blank lines in the pinyin box.
-        QList<QStringList> secPinyin(m_song.sections.size());
-        int secIdx = -1;
-        int pyIdx  = 0;
-        for (int li = 0; li < lyricsLines.size(); ++li) {
-            QString lt = lyricsLines[li].trimmed();
-            if (lt.startsWith('[') && lt.endsWith(']')) {
-                ++secIdx;
-                // Corresponding pinyin line (should be blank) — advance past it
-                if (pyIdx < pinyinLines.size()) ++pyIdx;
-            } else {
-                if (secIdx >= 0 && secIdx < m_song.sections.size()
-                    && pyIdx < pinyinLines.size()) {
-                    secPinyin[secIdx] << pinyinLines[pyIdx];
+        // Split pinyin box into groups separated by one or more blank lines.
+        QStringList pinyinAllLines = m_qpPinyinEdit->toPlainText().split('\n');
+        QList<QStringList> pinyinGroups;
+        QStringList curGroup;
+        for (const QString &line : pinyinAllLines) {
+            if (line.trimmed().isEmpty()) {
+                if (!curGroup.isEmpty()) {
+                    pinyinGroups << curGroup;
+                    curGroup.clear();
                 }
-                if (pyIdx < pinyinLines.size()) ++pyIdx;
+            } else {
+                curGroup << line;
             }
         }
+        if (!curGroup.isEmpty())
+            pinyinGroups << curGroup;
 
-        // Apply pinyin + Chinese flags to each section
+        // Assign group i → section i pinyin
         for (int i = 0; i < m_song.sections.size(); ++i) {
-            m_song.sections[i].isChinese       = true;
-            m_song.sections[i].showPinyin      = true;
-            m_song.sections[i].pinyin          = secPinyin[i].join('\n');
+            m_song.sections[i].isChinese  = true;
+            m_song.sections[i].showPinyin = true;
+            m_song.sections[i].pinyin     = (i < pinyinGroups.size())
+                                            ? pinyinGroups[i].join('\n')
+                                            : QString();
         }
     }
 
     populateSectionList();
     if (!m_song.sections.isEmpty()) m_sectionList->setCurrentRow(0);
     syncQuickPasteFromSections();
+
+    QMessageBox::information(this, "Import Complete",
+        QString("%1 section(s) imported successfully.")
+            .arg(m_song.sections.size()));
 }
 
 void SongEditDialog::onSaveToLibrary()
