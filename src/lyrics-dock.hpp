@@ -65,7 +65,7 @@ public:
                 int slideIndex, int sectionIndex,
                 QWidget *parent = nullptr);
     void setActive(bool active);
-    void applyScale(double scale, const QString &fontFamily = "Arial");
+    void applyScale(double scale, const QString &fontFamily = "Arial", int fixedWidth = -1);
     int  slideIndex()   const { return m_slideIdx; }
     int  sectionIndex() const { return m_sectionIdx; }
 signals:
@@ -101,6 +101,9 @@ public:
                              const QString &section);
     // Called by WebSocket server to update the Scripture tab from a remote client.
     void applyScriptureFromRemote(const QString &title, const QString &text);
+
+protected:
+    void resizeEvent(QResizeEvent *) override;
 
 private slots:
     void onAddToSequence();
@@ -151,8 +154,11 @@ private:
     QToolButton    *m_zoomInBtn, *m_zoomOutBtn;
     QSlider        *m_zoomSlider;
     QLabel         *m_zoomLabel;
-    QFontComboBox  *m_slideFontCombo  = nullptr;
-    QString         m_slideFontFamily = "Arial";
+    QFontComboBox  *m_slideFontCombo   = nullptr;
+    QString         m_slideFontFamily  = "Arial";
+    QSlider        *m_cardWidthSlider  = nullptr;
+    QLabel         *m_cardWidthLabel   = nullptr;
+    int             m_cardWidthPct     = 30;      // 10/20/30/40/50 %
 
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;
