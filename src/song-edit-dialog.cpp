@@ -322,14 +322,13 @@ void SongEditDialog::buildUi(int initialSectionIndex)
         // Extract only the lyric lines (strip [Section] headers and blanks)
         // then run through PinyinEngine, preserving blank-line boundaries.
         QString raw = m_quickPasteEdit->toPlainText();
-        // Rebuild a version with section headers replaced by blank lines
-        // so the line-count structure is preserved for the pinyin box.
+
         QStringList inLines  = raw.split('\n');
-        QStringList chLines; // lines fed to engine (headers → blank)
+        QStringList chLines;
         for (const QString &ln : inLines) {
             QString t = ln.trimmed();
             if (t.startsWith('[') && t.endsWith(']'))
-                chLines << QString(); // header → blank so pinyin aligns
+                chLines << QString();
             else
                 chLines << ln;
         }

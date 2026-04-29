@@ -31,8 +31,9 @@ static const char *overridePinyin(uint32_t cp)
         case 0x5723: return "Sheng";
         case 0x7962: return "Ni";
         case 0x795E: return "Shen";
-        case 0x7A4C: return "Su";   // 穌 traditional — Unihan "su" lacks capital
-        case 0x7A63: return "Su";   // 稣 simplified  — Unihan "rang" is wrong
+        case 0x7A23: return "Su";   // 稣 variant U+7A23 — Unihan "su" lacks capital
+        case 0x7A4C: return "Su";   // 穌 traditional  — Unihan "su" lacks capital
+        case 0x7A63: return "Su";   // 稣 simplified   — Unihan "rang" is wrong
         case 0x8036: return "Ye";
         default:     return nullptr;
     }
