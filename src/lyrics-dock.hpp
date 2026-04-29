@@ -62,7 +62,7 @@ class SlideButton : public QFrame {
     Q_OBJECT
 public:
     SlideButton(const QString &section, const QString &text,
-                int slideIndex, int sectionIndex,
+                int slideIndex, int sectionIndex, int slideNumber,
                 QWidget *parent = nullptr);
     void setActive(bool active);
     void applyScale(double scale, const QString &fontFamily = "Arial", int fixedWidth = -1);
@@ -76,7 +76,7 @@ protected:
     void paintEvent(QPaintEvent *) override;
     void contextMenuEvent(QContextMenuEvent *) override;
 private:
-    QLabel  *m_sectionLbl, *m_textLbl;
+    QLabel  *m_sectionLbl, *m_textLbl, *m_slideNumLbl;
     int      m_slideIdx, m_sectionIdx;
     bool     m_active = false;
     static const int BASE_W = 200;
@@ -158,7 +158,9 @@ private:
     QString         m_slideFontFamily  = "Arial";
     QSlider        *m_cardWidthSlider  = nullptr;
     QLabel         *m_cardWidthLabel   = nullptr;
-    int             m_cardWidthPct     = 30;      // 10/20/30/40/50 %
+    QToolButton    *m_cardWidthOutBtn  = nullptr;
+    QToolButton    *m_cardWidthInBtn   = nullptr;
+    int             m_cardWidthScale   = 100;     // 100/110/120/130/140/150 %
 
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;
