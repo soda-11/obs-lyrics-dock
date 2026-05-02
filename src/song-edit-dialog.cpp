@@ -319,21 +319,38 @@ void SongEditDialog::buildUi(int initialSectionIndex)
         m_qpGenPinyinBtn->setEnabled(on);
     });
     connect(m_qpGenPinyinBtn, &QPushButton::clicked, this, [this](){
-        // Extract only the lyric lines (strip [Section] headers and blanks)
-        // then run through PinyinEngine, preserving blank-line boundaries.
+        // Split lyrics into one group per [Section] header, skip blank lines
+        // within sections so we get exactly N pinyin groups for N sections.
+        // This ensures the importer can always match group i → section i.
         QString raw = m_quickPasteEdit->toPlainText();
+        QStringList inLines = raw.split('\n');
 
-        QStringList inLines  = raw.split('\n');
-        QStringList chLines;
+        QStringList pinyinGroups;
+        QStringList curSectionLines;
+        bool inSection = false;
+
+        auto flushSection = [&]() {
+            if (!curSectionLines.isEmpty()) {
+                QString pg = PinyinEngine::generate(curSectionLines.join('\n')).trimmed();
+                if (!pg.isEmpty())
+                    pinyinGroups << pg;
+                curSectionLines.clear();
+            }
+            inSection = false;
+        };
+
         for (const QString &ln : inLines) {
             QString t = ln.trimmed();
-            if (t.startsWith('[') && t.endsWith(']'))
-                chLines << QString();
-            else
-                chLines << ln;
+            if (t.startsWith('[') && t.endsWith(']')) {
+                flushSection();
+                inSection = true;
+            } else if (inSection && !t.isEmpty()) {
+                curSectionLines << ln;
+            }
         }
-        QString pinyin = PinyinEngine::generate(chLines.join('\n'));
-        m_qpPinyinEdit->setPlainText(pinyin);
+        flushSection();
+
+        m_qpPinyinEdit->setPlainText(pinyinGroups.join("\n\n"));
     });
 
     // Custom save buttons
