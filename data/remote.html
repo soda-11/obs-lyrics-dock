@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>OBS Lyrics Remote</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
@@ -48,8 +48,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 /* ── App shell ── */
 #app{display:none;flex-direction:column;height:100vh;}
 #statusBar{background:var(--bg2);border-bottom:1px solid var(--border);
-  /* env() pushes content below iPhone notch/status bar */
-  padding:env(safe-area-inset-top,0px) 4px 4px 4px;
+  padding:6px 4px 4px 4px;
   display:flex;align-items:stretch;gap:4px;}
 #statusText{flex:6;background:#992222;border:1px solid var(--border);
   border-radius:5px;padding:8px 4px;color:#fff;font-size:18px;
