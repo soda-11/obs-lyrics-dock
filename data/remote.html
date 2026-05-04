@@ -369,12 +369,14 @@ var needPin=false;
 var scripActiveSlide=-1;  // index of currently active scripture slide
 
 // ── Connection ────────────────────────────────────────────────
+var keepaliveTimer=null;
 function connect(){
   // Guard: don't open a new connection if already connecting or connected
   if(ws && ws.readyState < 2) return;
   // Close any stale socket cleanly before creating a new one
   if(ws){ ws.onclose=null; ws.onerror=null; try{ws.close();}catch(e){} ws=null; }
   clearTimeout(reconnTimer);
+  clearInterval(keepaliveTimer); keepaliveTimer=null;
 
   var host=location.hostname||'127.0.0.1', port=location.port||'8765';
   ws=new WebSocket('ws://'+host+':'+port);
@@ -384,9 +386,13 @@ function connect(){
     document.getElementById('statusText').textContent='Connected';
     // If we already authenticated in a previous session, re-send role
     if(myRole && !needPin) send({type:'setRole',role:myRole});
+    // Send a keepalive every 25 s — prevents mobile OS from killing the
+    // idle connection. Works alongside the server's 20-second ping frames.
+    keepaliveTimer=setInterval(function(){ send({type:'keepalive'}); }, 25000);
   };
   ws.onmessage=function(e){ try{handleMsg(JSON.parse(e.data));}catch(x){console.error(x);} };
   ws.onclose=ws.onerror=function(){
+    clearInterval(keepaliveTimer); keepaliveTimer=null;
     document.getElementById('connDot').classList.remove('ok');
     document.getElementById('statusText').textContent='Disconnected';
     document.getElementById('reconnBanner').style.display='block';

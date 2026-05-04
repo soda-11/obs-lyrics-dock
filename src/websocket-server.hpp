@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 #include <QList>
 #include <QStringList>
 #include <QString>
@@ -63,6 +64,7 @@ private slots:
     void onNewConnection();
     void onReadyRead();
     void onDisconnected();
+    void sendPingAll();   // periodic keepalive ping to all connected clients
 
 private:
     void        handleHttpOrWs(WsClient *client, const QByteArray &data);
@@ -71,14 +73,16 @@ private:
     void        sendJson      (WsClient *client, const QJsonObject &obj);
     void        sendFrame     (QTcpSocket *sock, const QByteArray &payload);
     void        sendPong      (QTcpSocket *sock, const QByteArray &payload);
+    void        sendPing      (QTcpSocket *sock, const QByteArray &payload);
     void        broadcastJson (const QJsonObject &obj, bool managersOnly = false);
     QJsonObject buildStateForRole(const QString &role) const;
     QByteArray  serveHtmlPage() const;
 
-    QTcpServer       *m_server  = nullptr;
-    LyricsDock       *m_dock    = nullptr; // weak ref — not owned
+    QTcpServer       *m_server    = nullptr;
+    LyricsDock       *m_dock      = nullptr; // weak ref — not owned
     QList<WsClient*>  m_clients;
-    quint16           m_port    = 8765;
+    quint16           m_port      = 8765;
+    QTimer           *m_pingTimer = nullptr; // 20-second keepalive ping
 
     // Cached last-known state — sent to new clients after setRole
     QString     m_lastLyrics;

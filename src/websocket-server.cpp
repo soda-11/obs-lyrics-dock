@@ -61,11 +61,23 @@ bool WebSocketServer::start(quint16 port)
         return false;
     }
     blog(LOG_INFO, "[lyrics-ws] Listening on port %d", (int)port);
+
+    // Send a WebSocket ping frame to every connected client every 20 seconds.
+    // Mobile OS and NAT routers drop idle TCP connections quickly; this keeps
+    // the connection alive even when no slides are being pushed.
+    if (!m_pingTimer) {
+        m_pingTimer = new QTimer(this);
+        connect(m_pingTimer, &QTimer::timeout,
+                this, &WebSocketServer::sendPingAll);
+    }
+    m_pingTimer->start(20000); // 20 s
     return true;
 }
 
 void WebSocketServer::stop()
 {
+    if (m_pingTimer) m_pingTimer->stop();
+
     // Stop accepting new connections first
     m_server->close();
 
@@ -475,6 +487,8 @@ void WebSocketServer::handleCommand(WsClient *client,
 {
     QString type = msg["type"].toString();
 
+    if (type == "keepalive") return; // client heartbeat — no response needed
+
     if (type == "getSongs") {
         // Send cached sequence-based song list
         if (!m_lastSongsJson.isEmpty()) {
@@ -648,6 +662,21 @@ void WebSocketServer::handleCommand(WsClient *client,
     else if (type == "stopRecord")
         QMetaObject::invokeMethod(qApp,
             [](){ obs_frontend_recording_stop(); }, Qt::QueuedConnection);
+}
+
+// ── Keepalive ─────────────────────────────────────────────────
+
+void WebSocketServer::sendPingAll()
+{
+    // Send a WebSocket ping frame (opcode 0x9) to every upgraded client.
+    // RFC 6455 requires browsers to reply with a pong, which resets the
+    // idle timer on NAT routers and prevents the mobile OS from killing
+    // the connection.
+    static const QByteArray kPayload("ka"); // minimal 2-byte payload
+    for (auto *c : m_clients) {
+        if (c->upgraded && c->socket && c->socket->isOpen())
+            sendPing(c->socket, kPayload);
+    }
 }
 
 // ── Broadcast helpers ─────────────────────────────────────────
@@ -835,6 +864,16 @@ void WebSocketServer::sendPong(QTcpSocket *sock, const QByteArray &pingData)
     frame.append((char)0x8A); // FIN + pong opcode (0xA)
     frame.append((char)(pingData.size() & 0x7F)); // no mask, small payload
     frame.append(pingData);
+    sock->write(frame);
+}
+
+void WebSocketServer::sendPing(QTcpSocket *sock, const QByteArray &payload)
+{
+    if (!sock || !sock->isOpen()) return;
+    QByteArray frame;
+    frame.append((char)0x89); // FIN + ping opcode (0x9)
+    frame.append((char)(payload.size() & 0x7F)); // no mask, small payload
+    frame.append(payload);
     sock->write(frame);
 }
 
