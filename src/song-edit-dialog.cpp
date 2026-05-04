@@ -319,38 +319,55 @@ void SongEditDialog::buildUi(int initialSectionIndex)
         m_qpGenPinyinBtn->setEnabled(on);
     });
     connect(m_qpGenPinyinBtn, &QPushButton::clicked, this, [this](){
-        // Split lyrics into one group per [Section] header, skip blank lines
-        // within sections so we get exactly N pinyin groups for N sections.
-        // This ensures the importer can always match group i → section i.
+        // Produce one [Section]-labelled block per section in the lyrics box.
+        // Blank lines within a section are preserved so the user sees paragraph
+        // breaks in the pinyin.  The importer splits by [Section] headers, so
+        // internal blank lines never cause a mismatch.
         QString raw = m_quickPasteEdit->toPlainText();
         QStringList inLines = raw.split('\n');
 
-        QStringList pinyinGroups;
+        QStringList outputLines;
         QStringList curSectionLines;
-        bool inSection = false;
+        QString     curLabel;
+        bool        inSection = false;
 
         auto flushSection = [&]() {
-            if (!curSectionLines.isEmpty()) {
-                QString pg = PinyinEngine::generate(curSectionLines.join('\n')).trimmed();
-                if (!pg.isEmpty())
-                    pinyinGroups << pg;
-                curSectionLines.clear();
-            }
+            if (!inSection) return;
+            outputLines << "[" + curLabel + "]";
+            // PinyinEngine::generate preserves blank lines already.
+            QString pg = PinyinEngine::generate(curSectionLines.join('\n'));
+            // Trim only leading/trailing blank lines, keep internal ones.
+            QStringList pgLines = pg.split('\n');
+            while (!pgLines.isEmpty() && pgLines.first().trimmed().isEmpty())
+                pgLines.removeFirst();
+            while (!pgLines.isEmpty() && pgLines.last().trimmed().isEmpty())
+                pgLines.removeLast();
+            for (const QString &pl : pgLines) outputLines << pl;
+            curSectionLines.clear();
             inSection = false;
         };
 
         for (const QString &ln : inLines) {
             QString t = ln.trimmed();
             if (t.startsWith('[') && t.endsWith(']')) {
-                flushSection();
-                inSection = true;
-            } else if (inSection && !t.isEmpty()) {
-                curSectionLines << ln;
+                if (inSection) {
+                    flushSection();
+                    outputLines << QString(); // blank separator between sections
+                }
+                curLabel   = t.mid(1, t.length() - 2);
+                inSection  = true;
+                curSectionLines.clear();
+            } else if (inSection) {
+                curSectionLines << ln; // keep blank lines within section
             }
         }
         flushSection();
 
-        m_qpPinyinEdit->setPlainText(pinyinGroups.join("\n\n"));
+        // Trim any trailing blank lines
+        while (!outputLines.isEmpty() && outputLines.last().trimmed().isEmpty())
+            outputLines.removeLast();
+
+        m_qpPinyinEdit->setPlainText(outputLines.join('\n'));
     });
 
     // Custom save buttons
@@ -676,35 +693,60 @@ void SongEditDialog::onQuickPasteClicked()
     Song parsed    = SongManager::parseQuickLyrics(m_titleEdit->text(), raw);
     m_song.sections = parsed.sections;
 
-    // If Chinese mode: distribute pinyin lines to each section.
-    // The pinyin box uses blank lines as section separators (one group per section,
-    // in the same order as the [Section] headers in the lyrics box).
-    // This group-based approach is immune to re-import drift: it never depends on
-    // a per-header blank placeholder, so pressing Import multiple times is safe.
+    // If Chinese mode: distribute pinyin content to each section.
+    // Primary path: pinyin box contains [Section] headers (as produced by
+    // Generate Pinyin).  We split by those headers in order → section i.
+    // This is robust: internal blank lines within a section are never
+    // mistaken for section boundaries.
+    // Fallback: if no headers are present (manually typed pinyin), split by
+    // blank lines as before.
     if (isChinese && !m_qpPinyinEdit->toPlainText().trimmed().isEmpty()) {
-        // Split pinyin box into groups separated by one or more blank lines.
         QStringList pinyinAllLines = m_qpPinyinEdit->toPlainText().split('\n');
-        QList<QStringList> pinyinGroups;
-        QStringList curGroup;
-        for (const QString &line : pinyinAllLines) {
-            if (line.trimmed().isEmpty()) {
-                if (!curGroup.isEmpty()) {
-                    pinyinGroups << curGroup;
-                    curGroup.clear();
-                }
-            } else {
-                curGroup << line;
-            }
-        }
-        if (!curGroup.isEmpty())
-            pinyinGroups << curGroup;
+        QRegularExpression hdr(R"(^\[(.+)\]\s*$)");
 
-        // Assign group i → section i pinyin
+        // Detect whether the pinyin box has [Section] headers.
+        bool hasHeaders = false;
+        for (const QString &ln : pinyinAllLines) {
+            if (hdr.match(ln.trimmed()).hasMatch()) { hasHeaders = true; break; }
+        }
+
+        QList<QString> pinyinPerSection; // one entry per section, in order
+
+        if (hasHeaders) {
+            // Split by [Section] header lines; content between headers = one section.
+            QString curContent;
+            bool inSec = false;
+            for (const QString &ln : pinyinAllLines) {
+                if (hdr.match(ln.trimmed()).hasMatch()) {
+                    if (inSec) pinyinPerSection << curContent.trimmed();
+                    curContent.clear();
+                    inSec = true;
+                } else if (inSec) {
+                    curContent += ln + '\n';
+                }
+            }
+            if (inSec) pinyinPerSection << curContent.trimmed();
+        } else {
+            // Fallback: blank-line group splitting (for manually typed pinyin).
+            QStringList curGroup;
+            for (const QString &ln : pinyinAllLines) {
+                if (ln.trimmed().isEmpty()) {
+                    if (!curGroup.isEmpty()) {
+                        pinyinPerSection << curGroup.join('\n');
+                        curGroup.clear();
+                    }
+                } else {
+                    curGroup << ln;
+                }
+            }
+            if (!curGroup.isEmpty()) pinyinPerSection << curGroup.join('\n');
+        }
+
         for (int i = 0; i < m_song.sections.size(); ++i) {
             m_song.sections[i].isChinese  = true;
             m_song.sections[i].showPinyin = true;
-            m_song.sections[i].pinyin     = (i < pinyinGroups.size())
-                                            ? pinyinGroups[i].join('\n')
+            m_song.sections[i].pinyin     = (i < pinyinPerSection.size())
+                                            ? pinyinPerSection[i]
                                             : QString();
         }
     }
