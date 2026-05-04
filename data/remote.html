@@ -48,14 +48,13 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 /* ── App shell ── */
 #app{display:none;flex-direction:column;height:100vh;}
 #statusBar{background:var(--bg2);border-bottom:1px solid var(--border);
-  padding:5px 10px;display:flex;align-items:center;gap:8px;font-size:11px;}
-#connDot{width:8px;height:8px;border-radius:50%;background:var(--danger);flex-shrink:0;}
+  padding:6px 10px;display:flex;align-items:center;gap:8px;}
+#connDot{width:10px;height:10px;border-radius:50%;background:var(--danger);flex-shrink:0;}
 #connDot.ok{background:var(--success);}
-#statusText{color:var(--text2);flex:1;}
-#roleTag{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;
-  background:var(--accent);color:#000;}
-#roleTag.viewer{background:#555;color:#ccc;}
-#roleTag.score{background:var(--warn);color:#000;}
+#statusText{flex:1;background:var(--bg3);border:1px solid var(--border);
+  border-radius:5px;padding:6px 14px;color:var(--text2);font-size:18px;}
+.statusBarBtn{background:var(--bg3);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;padding:6px 14px;cursor:pointer;flex-shrink:0;white-space:nowrap;}
 
 /* ── Manager tabs ── */
 #tabBar{display:flex;background:var(--bg2);border-bottom:1px solid var(--border);}
@@ -230,8 +229,15 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
   <div id="statusBar">
     <div id="connDot"></div>
     <span id="statusText">Connecting...</span>
-    <span id="roleTag">Manager</span>
-    <span style="color:#444;font-size:10px;margin-left:4px">v9.7.0</span>
+    <button id="followBtn" class="statusBarBtn" onclick="toggleFollow()"
+      style="display:none;font-size:24px;color:var(--text2);"
+      title="Follow active slide from OBS">Follow</button>
+    <button id="fontDecBtn" class="statusBarBtn" onclick="changeFontSize(-2)"
+      style="display:none;font-size:26px;"
+      title="Decrease font size">A−</button>
+    <button id="fontIncBtn" class="statusBarBtn" onclick="changeFontSize(2)"
+      style="display:none;font-size:30px;font-weight:bold;"
+      title="Increase font size">A+</button>
   </div>
 
   <!-- Manager tabs -->
@@ -342,22 +348,6 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
       <select id="scoreSongSelect" onchange="onScoreSongChanged()">
         <option value="">— Select a song —</option>
       </select>
-      <button id="followBtn" onclick="toggleFollow()"
-        style="background:var(--bg3);color:var(--text2);
-        border:1px solid var(--border);border-radius:5px;
-        padding:5px 9px;font-size:24px;cursor:pointer;
-        flex-shrink:0;white-space:nowrap;"
-        title="Follow active slide from OBS">Follow</button>
-      <button onclick="changeFontSize(-2)"
-        style="background:var(--bg3);color:var(--text);
-        border:1px solid var(--border);border-radius:5px;
-        padding:5px 9px;font-size:26px;cursor:pointer;flex-shrink:0;"
-        title="Decrease font size">A−</button>
-      <button onclick="changeFontSize(2)"
-        style="background:var(--bg3);color:var(--text);
-        border:1px solid var(--border);border-radius:5px;
-        padding:5px 9px;font-size:30px;font-weight:bold;cursor:pointer;flex-shrink:0;"
-        title="Increase font size">A+</button>
     </div>
     <div id="scoreBody">
       <div class="emptyState">Select a song above to see its lyrics</div>
@@ -430,6 +420,13 @@ function showViewerModeScreen(){
   document.getElementById('viewerModeScreen').style.display='flex';
 }
 
+function setScoreBarBtns(visible){
+  var d=visible?'inline-block':'none';
+  document.getElementById('followBtn').style.display=d;
+  document.getElementById('fontDecBtn').style.display=d;
+  document.getElementById('fontIncBtn').style.display=d;
+}
+
 function chooseRole(role){
   myRole=role; viewerMode=null; needPin=false;
   send({type:'setRole',role:role});
@@ -437,8 +434,7 @@ function chooseRole(role){
   document.getElementById('roleScreen').style.display='none';
   document.getElementById('viewerModeScreen').style.display='none';
   document.getElementById('app').style.display='flex';
-  var tag=document.getElementById('roleTag');
-  tag.textContent='Manager'; tag.className='';
+  setScoreBarBtns(false);
   document.getElementById('tabBar').style.display='flex';
   document.getElementById('content').style.display='block';
   document.getElementById('confPanel').style.display='none';
@@ -453,19 +449,16 @@ function chooseViewerMode(mode){
   document.getElementById('roleScreen').style.display='none';
   document.getElementById('viewerModeScreen').style.display='none';
   document.getElementById('app').style.display='flex';
-  var tag=document.getElementById('roleTag');
-  tag.className='viewer';
   document.getElementById('tabBar').style.display='none';
   document.getElementById('content').style.display='none';
 
   if(mode==='confidence'){
-    tag.textContent='Viewer';
+    setScoreBarBtns(false);
     document.getElementById('confPanel').style.display='flex';
     document.getElementById('scorePanel').style.display='none';
     updateConf(currentSlide);
   } else {
-    tag.textContent='Score';
-    tag.className='score';
+    setScoreBarBtns(true);
     document.getElementById('confPanel').style.display='none';
     document.getElementById('scorePanel').style.display='flex';
     renderScoreSongList();
