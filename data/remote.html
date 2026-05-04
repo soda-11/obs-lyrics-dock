@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>OBS Lyrics Remote</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
@@ -13,12 +13,16 @@
   --score-font-size:15px;
 }
 body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif;
-  height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+  height:100vh;overflow:hidden;display:flex;flex-direction:column;
+  /* Push all content below iPhone Dynamic Island / notch.
+     box-sizing:border-box keeps total height at 100vh (no overflow). */
+  padding-top:env(safe-area-inset-top,0px);
+  box-sizing:border-box;}
 
 /* ── Screens ── */
 #roleScreen,#viewerModeScreen,#pinScreen{
   display:flex;flex-direction:column;align-items:center;
-  justify-content:center;height:100vh;gap:16px;padding:24px;}
+  justify-content:center;flex:1;gap:16px;padding:24px;}
 #roleScreen h1,#viewerModeScreen h1,#pinScreen h1{font-size:20px;color:var(--accent);margin-bottom:4px;}
 #roleScreen p,#viewerModeScreen p,#pinScreen p{color:var(--text2);font-size:13px;text-align:center;margin-bottom:8px;}
 .roleBtn{width:100%;max-width:320px;padding:18px;border-radius:12px;
@@ -46,7 +50,7 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 #pinSubmit:active{opacity:0.8;}
 
 /* ── App shell ── */
-#app{display:none;flex-direction:column;height:100vh;}
+#app{display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden;}
 #statusBar{background:var(--bg2);border-bottom:1px solid var(--border);
   padding:6px 4px 4px 4px;
   display:flex;align-items:stretch;gap:4px;}
@@ -401,6 +405,19 @@ function connect(){
   };
 }
 function send(obj){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(obj)); }
+
+// ── iOS reconnect on page-visible ─────────────────────────────
+// iOS freezes JS when Safari goes to background, so onclose never fires.
+// The visibilitychange event is reliable — fires as soon as the user
+// switches back to the browser tab / unlocks the phone.
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='visible'){
+    if(!ws || ws.readyState>=2){ // CLOSING or CLOSED
+      clearTimeout(reconnTimer);
+      connect();
+    }
+  }
+});
 
 // ── PIN ───────────────────────────────────────────────────────
 function showPinScreen(){

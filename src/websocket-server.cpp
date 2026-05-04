@@ -268,9 +268,9 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
             }
             if (cp == peer) wsCount++;
         }
-        if (wsCount >= 2) {
+        if (wsCount >= 4) {
             blog(LOG_WARNING,
-                 "[lyrics-ws] Rejected WS from %s — max 2 per IP",
+                 "[lyrics-ws] Rejected WS from %s — max 4 per IP",
                  peer.toString().toUtf8().constData());
             client->socket->write(
                 "HTTP/1.1 429 Too Many Requests\r\n"
