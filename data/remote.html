@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>OBS Lyrics Remote</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
@@ -48,13 +48,16 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 /* ── App shell ── */
 #app{display:none;flex-direction:column;height:100vh;}
 #statusBar{background:var(--bg2);border-bottom:1px solid var(--border);
-  padding:6px 10px;display:flex;align-items:center;gap:8px;}
-#connDot{width:10px;height:10px;border-radius:50%;background:var(--danger);flex-shrink:0;}
-#connDot.ok{background:var(--success);}
-#statusText{flex:1;background:var(--bg3);border:1px solid var(--border);
-  border-radius:5px;padding:6px 14px;color:var(--text2);font-size:18px;}
+  /* env() pushes content below iPhone notch/status bar */
+  padding:env(safe-area-inset-top,0px) 4px 4px 4px;
+  display:flex;align-items:stretch;gap:4px;}
+#statusText{flex:6;background:#992222;border:1px solid var(--border);
+  border-radius:5px;padding:8px 4px;color:#fff;font-size:18px;
+  text-align:center;font-weight:600;transition:background 0.3s;}
+#statusText.ok{background:#226622;}
 .statusBarBtn{background:var(--bg3);color:var(--text);border:1px solid var(--border);
-  border-radius:5px;padding:6px 14px;cursor:pointer;flex-shrink:0;white-space:nowrap;}
+  border-radius:5px;padding:6px 4px;cursor:pointer;white-space:nowrap;
+  font-size:18px;text-align:center;}
 
 /* ── Manager tabs ── */
 #tabBar{display:flex;background:var(--bg2);border-bottom:1px solid var(--border);}
@@ -227,16 +230,15 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif
 <!-- ── Main app ── -->
 <div id="app">
   <div id="statusBar">
-    <div id="connDot"></div>
     <span id="statusText">Connecting...</span>
     <button id="followBtn" class="statusBarBtn" onclick="toggleFollow()"
-      style="display:none;font-size:24px;color:var(--text2);"
+      style="display:none;flex:8;color:var(--text2);"
       title="Follow active slide from OBS">Follow</button>
     <button id="fontDecBtn" class="statusBarBtn" onclick="changeFontSize(-2)"
-      style="display:none;font-size:26px;"
+      style="display:none;flex:3;"
       title="Decrease font size">A−</button>
     <button id="fontIncBtn" class="statusBarBtn" onclick="changeFontSize(2)"
-      style="display:none;font-size:30px;font-weight:bold;"
+      style="display:none;flex:3;font-weight:bold;"
       title="Increase font size">A+</button>
   </div>
 
@@ -382,8 +384,8 @@ function connect(){
   ws=new WebSocket('ws://'+host+':'+port);
   ws.onopen=function(){
     document.getElementById('reconnBanner').style.display='none';
-    document.getElementById('connDot').classList.add('ok');
-    document.getElementById('statusText').textContent='Connected';
+    var st=document.getElementById('statusText');
+    st.textContent='Connected'; st.classList.add('ok');
     // If we already authenticated in a previous session, re-send role
     if(myRole && !needPin) send({type:'setRole',role:myRole});
     // Send a keepalive every 25 s — prevents mobile OS from killing the
@@ -393,8 +395,8 @@ function connect(){
   ws.onmessage=function(e){ try{handleMsg(JSON.parse(e.data));}catch(x){console.error(x);} };
   ws.onclose=ws.onerror=function(){
     clearInterval(keepaliveTimer); keepaliveTimer=null;
-    document.getElementById('connDot').classList.remove('ok');
-    document.getElementById('statusText').textContent='Disconnected';
+    var st=document.getElementById('statusText');
+    st.textContent='Disconnected'; st.classList.remove('ok');
     document.getElementById('reconnBanner').style.display='block';
     reconnTimer=setTimeout(connect, 3000);
   };
@@ -427,7 +429,7 @@ function showViewerModeScreen(){
 }
 
 function setScoreBarBtns(visible){
-  var d=visible?'inline-block':'none';
+  var d=visible?'block':'none';
   document.getElementById('followBtn').style.display=d;
   document.getElementById('fontDecBtn').style.display=d;
   document.getElementById('fontIncBtn').style.display=d;
