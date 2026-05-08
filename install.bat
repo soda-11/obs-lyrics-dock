@@ -1,5 +1,5 @@
 @echo off
-echo Installing OBS Lyrics Dock v9.6.1...
+echo Installing OBS Lyrics Dock v10.2.0...
 
 set DLL_SRC=C:\Users\boon\OBS Lyrics Plugin\build\Release\obs-lyrics-dock.dll
 set DLL_DST=C:\Program Files\obs-studio\obs-plugins\64bit\obs-lyrics-dock.dll

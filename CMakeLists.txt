@@ -27,8 +27,10 @@ set(PLUGIN_SOURCES
     src/color-preset-button.cpp  src/color-preset-button.hpp
     src/websocket-server.cpp     src/websocket-server.hpp
     src/settings-dialog.cpp      src/settings-dialog.hpp
+    src/ws-tab.cpp               src/ws-tab.hpp
     src/pinyin-engine.cpp        src/pinyin-engine.hpp
                                  src/pinyin-table.hpp
+                                 src/qrcodegen.hpp
 )
 
 add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})

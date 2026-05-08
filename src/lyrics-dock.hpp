@@ -4,7 +4,7 @@
 #include "song-manager.hpp"
 #include "media-gallery.hpp"
 #include "websocket-server.hpp"
-#include "settings-dialog.hpp"
+#include "ws-tab.hpp"
 #include "mv-tab.hpp"
 #include "scripture-tab.hpp"
 #include "color-preset-button.hpp"
@@ -164,7 +164,7 @@ private:
 
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;
-    SettingsDialog   *m_settingsDialog = nullptr;
+    WsTab            *m_wsTab          = nullptr;
     MvTab            *m_mvTab          = nullptr;
     ScriptureTab     *m_scriptureTab   = nullptr;
     Song   m_currentSong;

@@ -54,6 +54,10 @@ static bool    s_scriptureMode = false;
 static QString s_scripTitle;
 static QString s_scripText;
 
+// QR overlay: path to the 80×80 PNG, visible flag
+static bool    s_qrVisible = false;
+static QString s_qrPath;
+
 // ── Defaults ──────────────────────────────────────────────────
 #define DEF_CANVAS_W      1280
 #define DEF_CANVAS_H       720
@@ -114,6 +118,9 @@ struct LyricsInstance {
     // Scripture text children
     obs_source_t *srcScripTitle = nullptr;
     obs_source_t *srcScripText  = nullptr;
+
+    // QR code overlay (image_source, 80×80 px, bottom-right)
+    obs_source_t *srcQr = nullptr;
 
     // Canvas
     int canvasW      = DEF_CANVAS_W;
@@ -446,6 +453,14 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
         inst->srcChineseStrips[i] = makeGdi(
             ("ch_zh_" + std::to_string(i)).c_str());
 
+    // QR overlay image source (empty path = hidden)
+    {
+        obs_data_t *qd = obs_data_create();
+        obs_data_set_string(qd, "file", "");
+        inst->srcQr = obs_source_create_private("image_source", "lyrics_qr_overlay", qd);
+        obs_data_release(qd);
+    }
+
     // Create OBS built-in fade transition source for media crossfade
     {
         obs_data_t *td = obs_data_create();
@@ -492,6 +507,7 @@ static void src_destroy(void *data)
     obs_source_release(inst->srcScripText);
     for (int i = 0; i < MAX_CH_STRIPS; ++i)
         obs_source_release(inst->srcChineseStrips[i]);
+    obs_source_release(inst->srcQr);
     delete inst;
 }
 
@@ -794,6 +810,18 @@ static void src_render(void *data, gs_effect_t *effect)
     obs_source_video_render(inst->srcTitle);
     gs_matrix_pop();
 
+    // ── 7. QR overlay — bottom-right corner (200×200 px) ─────
+    if (s_qrVisible && inst->srcQr) {
+        const int QR_SIZE = 200;
+        const int QR_MARGIN = 10;
+        float qrX = (float)(cW - QR_SIZE - QR_MARGIN);
+        float qrY = (float)(cH - QR_SIZE - QR_MARGIN);
+        gs_matrix_push();
+        gs_matrix_translate3f(qrX, qrY, 0.f);
+        obs_source_video_render(inst->srcQr);
+        gs_matrix_pop();
+    }
+
     UNUSED_PARAMETER(effect);
 }
 
@@ -916,7 +944,9 @@ void lyrics_renderer_push_chinese(const QString &chinese,
 void lyrics_renderer_media_push(const QString &filePath, int fadeMs)
 {
     // Lyrics gallery takes back control — exit MV mode so text renders again.
-    { QMutexLocker lk(&s_mu); s_mediaPath=filePath; s_mvMode=false; }
+    // Also clear s_mvMusicOnly so the media layer is rendered (it was suppressed
+    // while music-only MV was playing to hide album art).
+    { QMutexLocker lk(&s_mu); s_mediaPath=filePath; s_mvMode=false; s_mvMusicOnly=false; }
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances)
         applyMediaPath(inst,filePath,fadeMs,true /*loop*/);
@@ -1220,5 +1250,35 @@ void lyrics_renderer_set_pinyin_color(uint32_t fontColor, uint32_t outlineColor)
         if(s_chineseMode)
             updateChineseChildren(inst,s,s_pinyin,s_lyrics,s_english);
         obs_data_release(s);
+    }
+}
+
+// ── QR Overlay API ────────────────────────────────────────────
+
+void lyrics_renderer_qr_show(const QString &pngPath)
+{
+    QMutexLocker lk(&s_mu);
+    s_qrVisible = true;
+    s_qrPath    = pngPath;
+    for (auto *inst : s_instances) {
+        if (!inst->srcQr) continue;
+        obs_data_t *d = obs_data_create();
+        obs_data_set_string(d, "file",
+                            pngPath.toUtf8().constData());
+        obs_source_update(inst->srcQr, d);
+        obs_data_release(d);
+    }
+}
+
+void lyrics_renderer_qr_hide()
+{
+    QMutexLocker lk(&s_mu);
+    s_qrVisible = false;
+    for (auto *inst : s_instances) {
+        if (!inst->srcQr) continue;
+        obs_data_t *d = obs_data_create();
+        obs_data_set_string(d, "file", "");
+        obs_source_update(inst->srcQr, d);
+        obs_data_release(d);
     }
 }

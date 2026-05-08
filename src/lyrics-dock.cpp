@@ -7,7 +7,6 @@
 #include "icon-helpers.hpp"
 
 #include "lyrics-renderer.hpp"
-#include "settings-dialog.hpp"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -660,24 +659,9 @@ void LyricsDock::buildUi()
     auto *verLbl = new QLabel("v10.0");
     verLbl->setStyleSheet(
         "color: #ff4444; font-size: 9px; font-weight: bold;");
-    auto *settingsBtn = new QToolButton;
-    settingsBtn->setText(QString::fromUtf8("⚙"));
-    settingsBtn->setToolTip("WebSocket & Settings");
-    settingsBtn->setStyleSheet(
-        "QToolButton{color:#888;border:none;font-size:14px;padding:0 4px;}"
-        "QToolButton:hover{color:#ccc;}");
-    connect(settingsBtn, &QToolButton::clicked, this, [this](){
-        if (!m_settingsDialog) {
-            m_settingsDialog = new SettingsDialog(this);
-        }
-        m_settingsDialog->show();
-        m_settingsDialog->raise();
-        m_settingsDialog->activateWindow();
-    });
     titleL->addWidget(titleLbl);
     titleL->addStretch();
     titleL->addWidget(verLbl);
-    titleL->addWidget(settingsBtn);
     root->addWidget(titleBar);
 
     auto *splitter = new QSplitter(Qt::Horizontal);
@@ -959,6 +943,17 @@ void LyricsDock::buildUi()
 
     m_mvTab = new MvTab;
     tabs->addTab(m_mvTab, "MV");
+
+    m_wsTab = new WsTab;
+    tabs->addTab(m_wsTab, "WebSocket");
+
+    // Notify WsTab when it becomes visible / hidden so it can
+    // show or hide the QR overlay on the OBS preview.
+    connect(tabs, &QTabWidget::currentChanged, this, [this, tabs](int idx){
+        bool wsActive = (tabs->widget(idx) == m_wsTab);
+        if (wsActive) m_wsTab->onTabActivated();
+        else          m_wsTab->onTabDeactivated();
+    });
 
     root->addWidget(tabs, 1);
 

@@ -289,9 +289,15 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
         client->upgraded = true;
         client->rxBuf.clear();
 
-        // Auto-authenticate when no PIN is required
-        if (m_pin.isEmpty()) client->authed = true;
-        else {
+        // Always notify the client of auth state so it knows when to show
+        // the PIN screen vs. the role selection screen.
+        if (m_pin.isEmpty()) {
+            client->authed = true;
+            QJsonObject authOk;
+            authOk["type"]   = "auth";
+            authOk["result"] = "ok";
+            sendJson(client, authOk);
+        } else {
             // Ask the client to provide the PIN
             QJsonObject challenge;
             challenge["type"]   = "auth";
@@ -313,6 +319,9 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/html; charset=utf-8\r\n"
             "Content-Length: " + QByteArray::number(html.size()) + "\r\n"
+            "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+            "Pragma: no-cache\r\n"
+            "Expires: 0\r\n"
             "Connection: close\r\n\r\n" + html;
         client->socket->write(resp);
         client->socket->disconnectFromHost();

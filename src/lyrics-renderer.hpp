@@ -53,6 +53,13 @@ bool lyrics_renderer_mv_get_time(int64_t &timeMs, int64_t &durationMs);
 void lyrics_renderer_mv_set_time(int64_t timeMs);
 void lyrics_renderer_mv_play_pause(bool pause);
 
+// ── QR Overlay API ────────────────────────────────────────────
+// Show a QR code image (80×80 px PNG) at bottom-right of the OBS canvas.
+// Call qr_show() with the path to the pre-rendered PNG file,
+// call qr_hide() to remove it.
+void lyrics_renderer_qr_show(const QString &pngPath);
+void lyrics_renderer_qr_hide();
+
 // ── Color API ──────────────────────────────────────────────────
 // fontColor / outlineColor: 0x00BBGGRR  (Windows COLORREF / OBS text-gdiplus format)
 void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor);
