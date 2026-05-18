@@ -1,3 +1,0 @@
-set(__QT_DEPLOY_TARGET_obs-lyrics-dock_FILE C:/obs-lyrics-v9.5/build/Release/obs-lyrics-dock.dll)
-set(__QT_DEPLOY_TARGET_obs-lyrics-dock_TYPE MODULE_LIBRARY)
-set(__QT_DEPLOY_TARGET_obs-lyrics-dock_RUNTIME_DLLS C:/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.dll;C:/obs-studio/.deps/obs-deps-qt6-2025-08-23-x64/bin/Qt6Widgets.dll;C:/obs-studio/.deps/obs-deps-qt6-2025-08-23-x64/bin/Qt6Network.dll;C:/obs-studio/build_x64/libobs/Release/obs.dll;C:/obs-studio/build_x64/deps/w32-pthreads/Release/w32-pthreads.dll;C:/obs-studio/.deps/obs-deps-qt6-2025-08-23-x64/bin/Qt6Gui.dll;C:/obs-studio/.deps/obs-deps-qt6-2025-08-23-x64/bin/Qt6Core.dll)

@@ -94,13 +94,22 @@ public:
     QJsonArray buildSequenceJson() const;
     void       broadcastSequence();
     // Called by WebSocket server when a remote client pushes a slide.
-    // Finds the song in the sequence, selects it, highlights the tile.
     void pushSlideFromRemote(const QString &songTitle,
                              int slideIndex,
                              const QString &lyrics,
                              const QString &section);
     // Called by WebSocket server to update the Scripture tab from a remote client.
     void applyScriptureFromRemote(const QString &title, const QString &text);
+    // Called when OBS switches to a scene that does not contain the Lyrics source.
+    // Stops all media playback (video, music, background pictures, gallery).
+    void stopAllMedia();
+
+    // ── Hotkey-accessible actions ─────────────────────────────
+    Q_INVOKABLE void activateNextSlide();
+    Q_INVOKABLE void activatePrevSlide();
+    Q_INVOKABLE void activateNextSong();
+    Q_INVOKABLE void activatePrevSong();
+    Q_INVOKABLE void activateGalleryMedia(int oneBased);
 
 protected:
     void resizeEvent(QResizeEvent *) override;
@@ -126,6 +135,7 @@ private slots:
 private:
     void buildUi();
     void loadSongSlides(const Song &song);
+    void loadSequenceRowSlides(int row);   // update m_currentSong + loadSongSlides
     void clearSlideGrid();
     void setActiveSlide(int index);
     void pushCurrentSlide();
@@ -165,7 +175,8 @@ private:
     MediaGallery     *m_mediaGallery   = nullptr;
     WebSocketServer  *m_wsServer       = nullptr;
     WsTab            *m_wsTab          = nullptr;
-    MvTab            *m_mvTab          = nullptr;
+    VideoTab         *m_videoTab       = nullptr;
+    MusicTab         *m_musicTab       = nullptr;
     ScriptureTab     *m_scriptureTab   = nullptr;
     Song   m_currentSong;
     int    m_activeSlide           = -1;

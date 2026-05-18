@@ -1,9 +1,7 @@
-// mv-tab.cpp  v1.0
+// mv-tab.cpp  v2.0
 //
-// MV (Music & Video) tab implementation.
-// Reuses MediaCard/MediaItem from media-gallery for the video panel.
-// Audio output to OBS is handled by the existing mediaAudioCb in
-// lyrics-renderer.cpp — no extra wiring needed here.
+// Video tab:  MvVideoPanel (unchanged from v1.0)
+// Music tab:  MusicPicturePanel (new) + MvMusicPanel (unchanged from v1.0)
 
 #include "mv-tab.hpp"
 #include "lyrics-renderer.hpp"
@@ -25,24 +23,28 @@
 #include <QResizeEvent>
 #include <QEvent>
 #include <QFontMetrics>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPixmap>
+#include <QImageReader>
 
 #include <windows.h>   // CoInitializeEx
 
-// OBS_MEDIA_STATE_ENDED == 6  (from obs-module.h / media-io/media-io.h)
 static const int kMediaStateEnded = 6;
 
 static const QString VIDEO_FILTER =
     "Video Files (*.mp4 *.mov *.avi *.mkv *.webm *.flv *.wmv *.m4v)";
 static const QString AUDIO_FILTER =
     "Audio Files (*.mp3 *.wav *.aac *.flac *.ogg *.m4a *.wma *.opus)";
+static const QString IMAGE_FILTER =
+    "Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff *.tif)";
 
 // ══════════════════════════════════════════════════════════════
-// MvVideoPanel
+// MvVideoPanel  (identical to v1.0)
 // ══════════════════════════════════════════════════════════════
 
 MvVideoPanel::MvVideoPanel(QWidget *parent) : QWidget(parent)
 {
-    // COM ref-counted — safe to call even if MediaGallery already called it
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     buildUi();
     loadState();
@@ -54,7 +56,6 @@ void MvVideoPanel::buildUi()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ── Top bar ───────────────────────────────────────────────
     auto *topBar = new QWidget;
     topBar->setStyleSheet("background:#222;border-bottom:1px solid #333;");
     auto *topL = new QHBoxLayout(topBar);
@@ -76,7 +77,7 @@ void MvVideoPanel::buildUi()
         "border:1px solid #3a8a3a;}"
         "QPushButton:hover{border-color:#888;}");
 
-    m_clearBtn = new QPushButton(QString::fromUtf8("\u25A0 Stop"));
+    m_clearBtn = new QPushButton(QString::fromUtf8("■ Stop"));
     m_clearBtn->setFixedSize(68, 22);
     m_clearBtn->setStyleSheet(
         "QPushButton{background:#4a1a1a;color:#ff6b6b;"
@@ -89,14 +90,12 @@ void MvVideoPanel::buildUi()
     topL->addWidget(m_clearBtn);
     root->addWidget(topBar);
 
-    // ── Thumbnail grid ────────────────────────────────────────
     m_scrollArea = new QScrollArea;
     m_scrollArea->setWidgetResizable(true);
-    m_scrollArea->setStyleSheet(
-        "QScrollArea{background:#181818;border:none;}");
+    m_scrollArea->setStyleSheet("QScrollArea{background:#181818;border:none;}");
     m_container = new QWidget;
     m_container->setStyleSheet("background:#181818;");
-    m_container->setAcceptDrops(false); // no reorder in MV panel
+    m_container->setAcceptDrops(false);
     m_container->installEventFilter(this);
     m_grid = new QGridLayout(m_container);
     m_grid->setContentsMargins(6, 6, 6, 6);
@@ -105,17 +104,15 @@ void MvVideoPanel::buildUi()
     m_scrollArea->setWidget(m_container);
     root->addWidget(m_scrollArea, 1);
 
-    // ── Video controls ────────────────────────────────────────
     m_videoControls = new QWidget;
-    m_videoControls->setStyleSheet(
-        "background:#222;border-top:1px solid #333;");
+    m_videoControls->setStyleSheet("background:#222;border-top:1px solid #333;");
     auto *vcL = new QVBoxLayout(m_videoControls);
     vcL->setContentsMargins(6, 4, 6, 4);
     vcL->setSpacing(4);
 
     auto *scrubRow = new QHBoxLayout;
     m_playPauseBtn = new QToolButton;
-    m_playPauseBtn->setText(QString::fromUtf8("\u23F8")); // pause icon
+    m_playPauseBtn->setText(QString::fromUtf8("⏸"));
     m_playPauseBtn->setFixedSize(26, 22);
 
     m_scrubber = new QSlider(Qt::Horizontal);
@@ -138,10 +135,8 @@ void MvVideoPanel::buildUi()
     m_videoControls->setVisible(false);
     root->addWidget(m_videoControls);
 
-    // ── Fade duration bar ─────────────────────────────────────
     auto *fadeBar = new QWidget;
-    fadeBar->setStyleSheet(
-        "background:#1e1e1e;border-top:1px solid #333;");
+    fadeBar->setStyleSheet("background:#1e1e1e;border-top:1px solid #333;");
     auto *fadeL = new QHBoxLayout(fadeBar);
     fadeL->setContentsMargins(8, 4, 8, 4);
     auto *fadeLbl = new QLabel("Fade:");
@@ -157,29 +152,21 @@ void MvVideoPanel::buildUi()
     fadeL->addStretch();
     root->addWidget(fadeBar);
 
-    // ── Poll timer ────────────────────────────────────────────
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(300);
-    connect(m_pollTimer, &QTimer::timeout,
-            this, &MvVideoPanel::onPollTimer);
+    connect(m_pollTimer, &QTimer::timeout, this, &MvVideoPanel::onPollTimer);
     m_pollTimer->start();
 
-    // ── Connections ───────────────────────────────────────────
-    connect(addBtn,       &QPushButton::clicked,
-            this, &MvVideoPanel::onAddVideo);
-    connect(m_clearBtn,   &QPushButton::clicked,
-            this, &MvVideoPanel::onClearVideo);
-    connect(m_seqBtn,     &QPushButton::toggled,
-            this, &MvVideoPanel::onSequentialToggle);
-    connect(m_playPauseBtn, &QToolButton::clicked,
-            this, &MvVideoPanel::onPlayPause);
-    // OBS-style seek: seek immediately on user drag; timer respects isSliderDown()
+    connect(addBtn,       &QPushButton::clicked,  this, &MvVideoPanel::onAddVideo);
+    connect(m_clearBtn,   &QPushButton::clicked,  this, &MvVideoPanel::onClearVideo);
+    connect(m_seqBtn,     &QPushButton::toggled,  this, &MvVideoPanel::onSequentialToggle);
+    connect(m_playPauseBtn, &QToolButton::clicked,this, &MvVideoPanel::onPlayPause);
     connect(m_scrubber, &QSlider::sliderMoved, this, [this](int v) {
         int64_t t = 0, d = 0;
         if (!lyrics_renderer_mv_get_time(t, d) || d <= 0) return;
         int64_t seekMs = (int64_t)((double)v / 1000.0 * (double)d);
         lyrics_renderer_mv_set_time(seekMs);
-        m_seekCooldown = 5; // suppress false end-detection for ~1.5 s
+        m_seekCooldown = 5;
         auto fmt = [](int64_t ms) -> QString {
             int s = (int)(ms / 1000);
             return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
@@ -192,10 +179,7 @@ bool MvVideoPanel::eventFilter(QObject *obj, QEvent *event)
 {
     if (obj == m_container && event->type() == QEvent::Resize) {
         int nc = calcCols();
-        if (nc != m_currentCols) {
-            m_currentCols = nc;
-            rebuildGrid();
-        }
+        if (nc != m_currentCols) { m_currentCols = nc; rebuildGrid(); }
     }
     return QWidget::eventFilter(obj, event);
 }
@@ -214,12 +198,9 @@ void MvVideoPanel::rebuildGrid()
     int col = 0, row = 0;
     for (int i = 0; i < m_items.size(); ++i) {
         auto *card = new MediaCard(m_items[i], i, m_container);
-        // Disable drop-target reorder (no MediaGallery parent)
         card->setAcceptDrops(false);
-        connect(card, &MediaCard::clicked,
-                this, &MvVideoPanel::onCardClicked);
-        connect(card, &MediaCard::removeRequested,
-                this, &MvVideoPanel::onCardRemoveRequested);
+        connect(card, &MediaCard::clicked,         this, &MvVideoPanel::onCardClicked);
+        connect(card, &MediaCard::removeRequested, this, &MvVideoPanel::onCardRemoveRequested);
         card->setActive(i == m_activeIndex);
         m_grid->addWidget(card, row, col);
         m_cards << card;
@@ -230,8 +211,7 @@ void MvVideoPanel::rebuildGrid()
 void MvVideoPanel::setActiveCard(int index)
 {
     m_activeIndex = index;
-    for (auto *c : m_cards)
-        c->setActive(c->index() == index);
+    for (auto *c : m_cards) c->setActive(c->index() == index);
 }
 
 void MvVideoPanel::updateVideoControls()
@@ -240,10 +220,7 @@ void MvVideoPanel::updateVideoControls()
                  m_activeIndex < m_items.size() &&
                  m_items[m_activeIndex].isVideo);
     m_videoControls->setVisible(show);
-    if (show) {
-        m_paused = false;
-        m_playPauseBtn->setText(QString::fromUtf8("\u23F8")); // pause
-    }
+    if (show) { m_paused = false; m_playPauseBtn->setText(QString::fromUtf8("⏸")); }
 }
 
 void MvVideoPanel::playVideoAt(int index)
@@ -259,8 +236,7 @@ void MvVideoPanel::playVideoAt(int index)
 
 void MvVideoPanel::onAddVideo()
 {
-    QStringList files = QFileDialog::getOpenFileNames(
-        this, "Add Videos", QString(), VIDEO_FILTER);
+    QStringList files = QFileDialog::getOpenFileNames(this, "Add Videos", QString(), VIDEO_FILTER);
     if (files.isEmpty()) return;
     for (const auto &f : files) {
         MediaItem item; item.path = f; item.isVideo = true;
@@ -270,21 +246,13 @@ void MvVideoPanel::onAddVideo()
     saveState();
 }
 
-void MvVideoPanel::onCardClicked(int index)
-{
-    playVideoAt(index);
-    saveState();
-}
+void MvVideoPanel::onCardClicked(int index) { playVideoAt(index); saveState(); }
 
 void MvVideoPanel::onCardRemoveRequested(int index)
 {
     if (index < 0 || index >= m_items.size()) return;
-    if (m_activeIndex == index) {
-        stopPlayback();
-        lyrics_renderer_mv_clear();
-    } else if (m_activeIndex > index) {
-        m_activeIndex--;
-    }
+    if (m_activeIndex == index) { stopPlayback(); lyrics_renderer_mv_clear(); }
+    else if (m_activeIndex > index) m_activeIndex--;
     m_items.removeAt(index);
     rebuildGrid();
     saveState();
@@ -307,54 +275,33 @@ void MvVideoPanel::onPlayPause()
 {
     m_paused = !m_paused;
     lyrics_renderer_mv_play_pause(m_paused);
-    m_playPauseBtn->setText(
-        m_paused ? QString::fromUtf8("\u25B6")
-                 : QString::fromUtf8("\u23F8"));
+    m_playPauseBtn->setText(m_paused ? QString::fromUtf8("▶")
+                                     : QString::fromUtf8("⏸"));
 }
-
-// (seek bar now uses sliderMoved lambda in buildUi — no separate slot needed)
 
 void MvVideoPanel::onPollTimer()
 {
-    // ── Update scrubber and time label ────────────────────────
-    // isSliderDown() is Qt's native way to know if user is dragging (OBS approach)
     if (m_videoControls->isVisible() && !m_scrubber->isSliderDown()) {
         int64_t t = 0, d = 0;
         if (lyrics_renderer_mv_get_time(t, d) && d > 0) {
             m_scrubber->setValue((int)((double)t / (double)d * 1000.0));
             auto fmt = [](int64_t ms) -> QString {
                 int s = (int)(ms / 1000);
-                return QString("%1:%2").arg(s / 60)
-                                      .arg(s % 60, 2, 10, QChar('0'));
+                return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
             };
             m_timeLbl->setText(fmt(t) + " / " + fmt(d));
         }
     }
-
-    // ── End-of-video detection ────────────────────────────────
     if (m_activeIndex < 0 || m_endHandled) return;
-    if (m_seekCooldown > 0) { --m_seekCooldown; return; } // ignore state briefly after seek
-    int state = lyrics_renderer_mv_get_state();
-    if (state != kMediaStateEnded) return;
-
+    if (m_seekCooldown > 0) { --m_seekCooldown; return; }
+    if (lyrics_renderer_mv_get_state() != kMediaStateEnded) return;
     m_endHandled = true;
-
     if (m_sequential) {
-        // Play next video; stop after last (no loop)
         int next = m_activeIndex + 1;
-        if (next < m_items.size()) {
-            playVideoAt(next);
-        } else {
-            // End of list — clear screen
-            setActiveCard(-1);
-            m_videoControls->setVisible(false);
-            lyrics_renderer_mv_clear();
-        }
+        if (next < m_items.size()) playVideoAt(next);
+        else { setActiveCard(-1); m_videoControls->setVisible(false); lyrics_renderer_mv_clear(); }
     } else {
-        // No sequential — just go blank
-        setActiveCard(-1);
-        m_videoControls->setVisible(false);
-        lyrics_renderer_mv_clear();
+        setActiveCard(-1); m_videoControls->setVisible(false); lyrics_renderer_mv_clear();
     }
 }
 
@@ -363,13 +310,12 @@ void MvVideoPanel::stopPlayback()
     setActiveCard(-1);
     m_videoControls->setVisible(false);
     m_paused     = false;
-    m_endHandled = true; // prevent poll timer from acting
+    m_endHandled = true;
 }
 
 QString MvVideoPanel::statePath() const
 {
-    QString dir = QStandardPaths::writableLocation(
-                      QStandardPaths::AppDataLocation)
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
                   + "/obs-lyrics-dock";
     QDir().mkpath(dir);
     return dir + "/mv-video.json";
@@ -380,12 +326,11 @@ void MvVideoPanel::saveState()
     QJsonArray arr;
     for (const auto &item : m_items) arr.append(item.path);
     QJsonObject obj;
-    obj["items"]  = arr;
-    obj["fadeMs"] = m_fadeSpin->value();
+    obj["items"]      = arr;
+    obj["fadeMs"]     = m_fadeSpin->value();
     obj["sequential"] = m_sequential;
     QFile f(statePath());
-    if (f.open(QIODevice::WriteOnly))
-        f.write(QJsonDocument(obj).toJson());
+    if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(obj).toJson());
 }
 
 void MvVideoPanel::loadState()
@@ -402,15 +347,13 @@ void MvVideoPanel::loadState()
         MediaItem item; item.path = path; item.isVideo = true;
         m_items << item;
     }
-    if (obj.contains("fadeMs"))
-        m_fadeSpin->setValue(obj["fadeMs"].toInt());
-    bool seq = obj["sequential"].toBool(false);
-    m_seqBtn->setChecked(seq); // triggers onSequentialToggle
+    if (obj.contains("fadeMs")) m_fadeSpin->setValue(obj["fadeMs"].toInt());
+    m_seqBtn->setChecked(obj["sequential"].toBool(false));
     rebuildGrid();
 }
 
 // ══════════════════════════════════════════════════════════════
-// MvMusicPanel
+// MvMusicPanel  (identical to v1.0)
 // ══════════════════════════════════════════════════════════════
 
 MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
@@ -419,16 +362,17 @@ MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    // ── Top bar ───────────────────────────────────────────────
+    // ── Top bar: Add / engine label / reorder / loop / remove / stop ──────────
     auto *topBar = new QWidget;
     topBar->setStyleSheet("background:#222;border-bottom:1px solid #333;");
     auto *topL = new QHBoxLayout(topBar);
     topL->setContentsMargins(6, 4, 6, 4);
+    topL->setSpacing(4);
 
-    auto *addBtn = new QPushButton("+ Add Music");
+    auto *addBtn = new QPushButton("+ Add");
     addBtn->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+    addBtn->setToolTip("Add music files");
 
-    // Engine badge — shows which player backend will be used for music
     bool vlc = lyrics_renderer_vlc_available();
     auto *engineLbl = new QLabel(vlc ? "VLC" : "FFmpeg");
     engineLbl->setToolTip(vlc
@@ -437,49 +381,69 @@ MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
           "Install OBS VLC plugin for better music seeking.");
     engineLbl->setStyleSheet(vlc
         ? "color:#5dbb5d;font-size:9px;font-weight:bold;"
-          "border:1px solid #3a8a3a;border-radius:3px;padding:1px 4px;"
-          "background:#1a3a1a;"
+          "border:1px solid #3a8a3a;border-radius:3px;padding:1px 4px;background:#1a3a1a;"
         : "color:#ffaa44;font-size:9px;font-weight:bold;"
-          "border:1px solid #885522;border-radius:3px;padding:1px 4px;"
-          "background:#2a1a0a;");
+          "border:1px solid #885522;border-radius:3px;padding:1px 4px;background:#2a1a0a;");
+
+    // Up / Down reorder buttons
+    m_upBtn = new QToolButton;
+    m_upBtn->setText(QString::fromUtf8("▲"));
+    m_upBtn->setFixedSize(24, 24);
+    m_upBtn->setToolTip("Move selected track up");
+    m_upBtn->setEnabled(false);
+
+    m_downBtn = new QToolButton;
+    m_downBtn->setText(QString::fromUtf8("▼"));
+    m_downBtn->setFixedSize(24, 24);
+    m_downBtn->setToolTip("Move selected track down");
+    m_downBtn->setEnabled(false);
+
+    // Loop button — cycles: Off → All → One → Off
+    m_loopBtn = new QPushButton("Loop: Off");
+    m_loopBtn->setFixedHeight(24);
+    m_loopBtn->setToolTip("Loop mode: Off → Loop All → Loop One → Off");
+    applyLoopButtonStyle();
 
     m_removeBtn = new QPushButton;
     m_removeBtn->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
     m_removeBtn->setToolTip("Remove selected track");
-    m_removeBtn->setFixedSize(32, 28);
+    m_removeBtn->setFixedSize(28, 24);
     m_removeBtn->setEnabled(false);
 
-    m_stopBtn = new QPushButton(QString::fromUtf8("\u25A0 Stop"));
-    m_stopBtn->setFixedSize(68, 22);
+    m_stopBtn = new QPushButton(QString::fromUtf8("■"));
+    m_stopBtn->setFixedSize(28, 24);
+    m_stopBtn->setToolTip("Stop music");
     m_stopBtn->setStyleSheet(
         "QPushButton{background:#4a1a1a;color:#ff6b6b;"
-        "border:1px solid #8b2020;border-radius:3px;padding:0 2px;}"
+        "border:1px solid #8b2020;border-radius:3px;}"
         "QPushButton:hover{background:#6a2020;}");
 
     topL->addWidget(addBtn);
     topL->addWidget(engineLbl);
     topL->addStretch();
+    topL->addWidget(m_upBtn);
+    topL->addWidget(m_downBtn);
+    topL->addWidget(m_loopBtn);
     topL->addWidget(m_removeBtn);
     topL->addWidget(m_stopBtn);
     root->addWidget(topBar);
 
-    // ── Playlist ──────────────────────────────────────────────
+    // ── Track list ────────────────────────────────────────────────────────────
     m_list = new QListWidget;
     m_list->setStyleSheet(
         "QListWidget{background:#181818;border:none;}"
         "QListWidget::item{padding:4px 6px;color:#ccc;}"
         "QListWidget::item:selected{background:#1e6bb8;color:#fff;}"
         "QListWidget::item:hover{background:#252525;}");
-    m_list->setDragEnabled(true);
-    m_list->setAcceptDrops(true);
-    m_list->setDropIndicatorShown(true);
-    m_list->setDragDropMode(QAbstractItemView::InternalMove);
-    m_list->setDefaultDropAction(Qt::MoveAction);
+    // Drag-drop disabled in favour of explicit ▲/▼ buttons
+    m_list->setDragEnabled(false);
+    m_list->setAcceptDrops(false);
+    m_list->setDragDropMode(QAbstractItemView::NoDragDrop);
     root->addWidget(m_list, 1);
 
-    // ── Seek bar (play/pause + scrubber + time) ───────────────────────────────────────────────
+    // ── Seek / play-pause bar ─────────────────────────────────────────────────
     m_playPauseBtn = new QToolButton;
-    m_playPauseBtn->setText(QString::fromUtf8("\u25B6")); // ▶
+    m_playPauseBtn->setText(QString::fromUtf8("▶"));
     m_playPauseBtn->setFixedSize(28, 28);
     m_playPauseBtn->setToolTip("Play / Pause");
 
@@ -488,6 +452,7 @@ MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
     auto *seekL = new QHBoxLayout(m_seekBar);
     seekL->setContentsMargins(6, 3, 6, 3);
     seekL->setSpacing(6);
+
     m_musicScrubber = new QSlider(Qt::Horizontal);
     m_musicScrubber->setRange(0, 1000);
     m_musicScrubber->setValue(0);
@@ -500,22 +465,23 @@ MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
         "QSlider::handle:horizontal:hover{background:#7dc4ff;}"
         "QSlider::groove:horizontal:disabled{background:#222;}"
         "QSlider::handle:horizontal:disabled{background:#555;}");
+
     m_musicTimeLbl = new QLabel("0:00 / 0:00");
     m_musicTimeLbl->setStyleSheet("color:#888;font-size:9px;");
     m_musicTimeLbl->setFixedWidth(90);
     m_musicTimeLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
     seekL->addWidget(m_playPauseBtn);
     seekL->addWidget(m_musicScrubber, 1);
     seekL->addWidget(m_musicTimeLbl);
     root->addWidget(m_seekBar);
 
-    // ── Now-playing bar ───────────────────────────────────────
+    // ── Now-playing label ─────────────────────────────────────────────────────
     auto *npBar = new QWidget;
-    npBar->setStyleSheet(
-        "background:#1a1a1a;border-top:1px solid #333;");
+    npBar->setStyleSheet("background:#1a1a1a;border-top:1px solid #333;");
     auto *npL = new QHBoxLayout(npBar);
     npL->setContentsMargins(8, 4, 8, 4);
-    auto *npIcon = new QLabel(QString::fromUtf8("\u266A")); // ♪
+    auto *npIcon = new QLabel(QString::fromUtf8("♪"));
     npIcon->setStyleSheet("color:#4da6ff;font-size:12px;");
     m_nowPlayingLbl = new QLabel;
     m_nowPlayingLbl->setStyleSheet("color:#aaa;font-size:9px;");
@@ -524,87 +490,132 @@ MvMusicPanel::MvMusicPanel(QWidget *parent) : QWidget(parent)
     npL->addWidget(m_nowPlayingLbl, 1);
     root->addWidget(npBar);
 
-    // ── Poll timer ────────────────────────────────────────────
+    // ── Poll timer ────────────────────────────────────────────────────────────
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(300);
-    connect(m_pollTimer, &QTimer::timeout,
-            this, &MvMusicPanel::onPollTimer);
+    connect(m_pollTimer, &QTimer::timeout, this, &MvMusicPanel::onPollTimer);
     m_pollTimer->start();
 
-    // ── Connections ───────────────────────────────────────────
-    connect(addBtn,         &QPushButton::clicked,
-            this, &MvMusicPanel::onAddMusic);
-    connect(m_playPauseBtn, &QToolButton::clicked,
-            this, &MvMusicPanel::onPlayPause);
-    connect(m_removeBtn,    &QPushButton::clicked,
-            this, &MvMusicPanel::onRemoveMusic);
-    connect(m_stopBtn,      &QPushButton::clicked,
-            this, &MvMusicPanel::onStopMusic);
-    connect(m_list, &QListWidget::itemDoubleClicked,
-            this, &MvMusicPanel::onItemDoubleClicked);
-    connect(m_list, &QListWidget::currentRowChanged,
-            this, [this](int){ updateButtons(); });
-    // OBS-style seek: seek immediately on user drag; timer respects isSliderDown().
-    // Uses m_trackDuration (cached by poll timer) so seek works even if
-    // obs_source_media_get_duration returns 0 on the first query during a drag.
+    // ── Connections ───────────────────────────────────────────────────────────
+    connect(addBtn,         &QPushButton::clicked,       this, &MvMusicPanel::onAddMusic);
+    connect(m_playPauseBtn, &QToolButton::clicked,       this, &MvMusicPanel::onPlayPause);
+    connect(m_removeBtn,    &QPushButton::clicked,       this, &MvMusicPanel::onRemoveMusic);
+    connect(m_stopBtn,      &QPushButton::clicked,       this, &MvMusicPanel::onStopMusic);
+    connect(m_upBtn,        &QToolButton::clicked,       this, &MvMusicPanel::onMoveUp);
+    connect(m_downBtn,      &QToolButton::clicked,       this, &MvMusicPanel::onMoveDown);
+    connect(m_loopBtn,      &QPushButton::clicked,       this, &MvMusicPanel::onLoopToggle);
+    connect(m_list, &QListWidget::itemDoubleClicked, this, &MvMusicPanel::onItemDoubleClicked);
+    connect(m_list, &QListWidget::currentRowChanged, this, [this](int){ updateButtons(); });
+
+    // Scrubber: seek using music-specific API (works even when picture is showing)
     connect(m_musicScrubber, &QSlider::sliderMoved, this, [this](int v) {
         if (m_trackDuration <= 0) {
-            // Duration not yet cached — try to get it now
             int64_t t = 0, d = 0;
-            if (!lyrics_renderer_mv_get_time(t, d) || d <= 0) return;
+            if (!lyrics_renderer_music_get_time(t, d) || d <= 0) return;
             m_trackDuration = d;
         }
         int64_t seekMs = (int64_t)((double)v / 1000.0 * (double)m_trackDuration);
-        lyrics_renderer_mv_set_time(seekMs);
-        m_seekCooldown = 5; // suppress false end-detection for ~1.5 s
+        lyrics_renderer_music_set_time(seekMs);
+        m_seekCooldown = 5;
         auto fmt = [](int64_t ms) -> QString {
             int s = (int)(ms / 1000);
             return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
         };
         m_musicTimeLbl->setText(fmt(seekMs) + " / " + fmt(m_trackDuration));
     });
-    connect(m_list->model(), &QAbstractItemModel::rowsMoved,
-            this, [this]() {
-                // Rebuild m_items from widget order (UserRole holds file paths)
-                QString activePath = (m_activeIndex >= 0 && m_activeIndex < m_items.size())
-                                     ? m_items[m_activeIndex] : QString();
-                m_items.clear();
-                for (int i = 0; i < m_list->count(); ++i)
-                    m_items << m_list->item(i)->data(Qt::UserRole).toString();
-                m_activeIndex = activePath.isEmpty() ? -1 : m_items.indexOf(activePath);
-                saveState();
-            });
 
     loadState();
 }
 
 void MvMusicPanel::updateButtons()
 {
-    m_removeBtn->setEnabled(m_list->currentRow() >= 0);
+    int row = m_list->currentRow();
+    bool has = (row >= 0);
+    m_removeBtn->setEnabled(has);
+    m_upBtn->setEnabled(has && row > 0);
+    m_downBtn->setEnabled(has && row < m_items.size() - 1);
+}
+
+void MvMusicPanel::applyLoopButtonStyle()
+{
+    switch (m_loopMode) {
+    case LoopMode::None:
+        m_loopBtn->setText("Loop: Off");
+        m_loopBtn->setStyleSheet(
+            "QPushButton{background:#2a2a2a;color:#666;"
+            "border:1px solid #444;border-radius:3px;padding:0 6px;}"
+            "QPushButton:hover{border-color:#888;color:#aaa;}");
+        break;
+    case LoopMode::All:
+        m_loopBtn->setText(QString::fromUtf8("⟳ Loop All"));
+        m_loopBtn->setStyleSheet(
+            "QPushButton{background:#1a2a3a;color:#4da6ff;"
+            "border:1px solid #2a6ab8;border-radius:3px;padding:0 6px;}"
+            "QPushButton:hover{background:#1e3a5a;}");
+        break;
+    case LoopMode::One:
+        m_loopBtn->setText(QString::fromUtf8("⟳ Loop 1"));
+        m_loopBtn->setStyleSheet(
+            "QPushButton{background:#2a1a3a;color:#cc88ff;"
+            "border:1px solid #7a3ab8;border-radius:3px;padding:0 6px;}"
+            "QPushButton:hover{background:#3a2a4a;}");
+        break;
+    }
+}
+
+void MvMusicPanel::onMoveUp()
+{
+    int row = m_list->currentRow();
+    if (row <= 0 || row >= m_items.size()) return;
+    // Track active index across the swap
+    if      (m_activeIndex == row)     m_activeIndex = row - 1;
+    else if (m_activeIndex == row - 1) m_activeIndex = row;
+    m_items.swapItemsAt(row, row - 1);
+    auto *item = m_list->takeItem(row);
+    m_list->insertItem(row - 1, item);
+    m_list->setCurrentRow(row - 1);
+    saveState();
+}
+
+void MvMusicPanel::onMoveDown()
+{
+    int row = m_list->currentRow();
+    if (row < 0 || row >= m_items.size() - 1) return;
+    if      (m_activeIndex == row)     m_activeIndex = row + 1;
+    else if (m_activeIndex == row + 1) m_activeIndex = row;
+    m_items.swapItemsAt(row, row + 1);
+    auto *item = m_list->takeItem(row);
+    m_list->insertItem(row + 1, item);
+    m_list->setCurrentRow(row + 1);
+    saveState();
+}
+
+void MvMusicPanel::onLoopToggle()
+{
+    // Cycle: None → All → One → None
+    switch (m_loopMode) {
+    case LoopMode::None: m_loopMode = LoopMode::All; break;
+    case LoopMode::All:  m_loopMode = LoopMode::One; break;
+    case LoopMode::One:  m_loopMode = LoopMode::None; break;
+    }
+    applyLoopButtonStyle();
+    saveState();
 }
 
 void MvMusicPanel::setActiveRow(int index)
 {
     m_activeIndex = index;
-    // Use QListWidget's built-in selection for highlighting so the
-    // stylesheet's ::item:selected rule is what paints the active row.
-    // Manual setBackground/setForeground are overridden by stylesheets in Qt.
     {
-        // Block the currentRowChanged signal so updateButtons() isn't called
-        // spuriously while we programmatically select the playing row.
         QSignalBlocker blk(m_list);
-        if (index >= 0)
-            m_list->setCurrentRow(index);
-        else
-            m_list->clearSelection();
+        if (index >= 0) m_list->setCurrentRow(index);
+        else            m_list->clearSelection();
     }
     if (index >= 0 && index < m_items.size()) {
         QString name = QFileInfo(m_items[index]).fileName();
         QFontMetrics fm(m_nowPlayingLbl->font());
         m_nowPlayingLbl->setText(
             fm.elidedText(name, Qt::ElideMiddle,
-                          m_nowPlayingLbl->width() > 0
-                          ? m_nowPlayingLbl->width() : 200));
+                          m_nowPlayingLbl->width() > 0 ? m_nowPlayingLbl->width() : 200));
     } else {
         m_nowPlayingLbl->clear();
     }
@@ -617,25 +628,23 @@ void MvMusicPanel::playMusicAt(int index)
     m_endHandled    = false;
     m_musicPaused   = false;
     m_seekCooldown  = 0;
-    m_trackDuration = 0;  // will be populated by poll timer once source reports it
+    m_trackDuration = 0;
     m_musicScrubber->setValue(0);
     m_musicScrubber->setEnabled(true);
     m_musicTimeLbl->setText("0:00 / 0:00");
-    m_playPauseBtn->setText(QString::fromUtf8("\u23F8")); // ⏸ playing
+    m_playPauseBtn->setText(QString::fromUtf8("⏸"));
     lyrics_renderer_mv_music_push(m_items[index]);
     emit musicStarted();
 }
 
 void MvMusicPanel::onAddMusic()
 {
-    QStringList files = QFileDialog::getOpenFileNames(
-        this, "Add Music", QString(), AUDIO_FILTER);
+    QStringList files = QFileDialog::getOpenFileNames(this, "Add Music", QString(), AUDIO_FILTER);
     if (files.isEmpty()) return;
     for (const auto &f : files) {
         if (QFile::exists(f)) {
             m_items << f;
-            QString name = QFileInfo(f).fileName();
-            auto *it = new QListWidgetItem(name);
+            auto *it = new QListWidgetItem(QFileInfo(f).fileName());
             it->setData(Qt::UserRole, f);
             m_list->addItem(it);
         }
@@ -653,12 +662,8 @@ void MvMusicPanel::onRemoveMusic()
 {
     int row = m_list->currentRow();
     if (row < 0 || row >= m_items.size()) return;
-    if (m_activeIndex == row) {
-        stopPlayback();
-        lyrics_renderer_mv_clear();
-    } else if (m_activeIndex > row) {
-        m_activeIndex--;
-    }
+    if (m_activeIndex == row) { stopPlayback(); lyrics_renderer_mv_music_clear(); }
+    else if (m_activeIndex > row) m_activeIndex--;
     m_items.removeAt(row);
     delete m_list->takeItem(row);
     updateButtons();
@@ -671,69 +676,72 @@ void MvMusicPanel::onStopMusic()
     m_musicPaused   = false;
     m_seekCooldown  = 0;
     m_trackDuration = 0;
-    m_playPauseBtn->setText(QString::fromUtf8("\u25B6"));
+    m_playPauseBtn->setText(QString::fromUtf8("▶"));
     m_musicScrubber->setValue(0);
     m_musicScrubber->setEnabled(false);
     m_musicTimeLbl->setText("0:00 / 0:00");
-    lyrics_renderer_mv_clear();
+    lyrics_renderer_mv_music_clear();
+    emit stopped();
 }
 
 void MvMusicPanel::onPlayPause()
 {
     if (m_activeIndex < 0) {
-        // Nothing playing — start the selected track
         int row = m_list->currentRow();
         if (row >= 0) playMusicAt(row);
         return;
     }
     m_musicPaused = !m_musicPaused;
-    lyrics_renderer_mv_play_pause(m_musicPaused);
-    m_playPauseBtn->setText(
-        m_musicPaused ? QString::fromUtf8("\u25B6")   // ▶ resume
-                      : QString::fromUtf8("\u23F8"));  // ⏸ pause
+    lyrics_renderer_music_play_pause(m_musicPaused);
+    m_playPauseBtn->setText(m_musicPaused ? QString::fromUtf8("▶")
+                                          : QString::fromUtf8("⏸"));
 }
-
-// (scrubber now uses sliderMoved lambda in buildUi — no separate slots needed)
 
 void MvMusicPanel::onPollTimer()
 {
-    // ── Update scrubber position ───────────────────────────────
-    // isSliderDown() is Qt's native drag-detection (OBS approach)
+    // ── Update seek bar (Bug 1 fix: use music-specific API, not mv_get_time) ──
     if (m_activeIndex >= 0) {
         int64_t t = 0, d = 0;
-        if (lyrics_renderer_mv_get_time(t, d) && d > 0) {
-            if (m_trackDuration <= 0)
-                m_trackDuration = d; // cache duration the first time we get it
+        if (lyrics_renderer_music_get_time(t, d) && d > 0) {
+            if (m_trackDuration <= 0) m_trackDuration = d;
             if (!m_musicScrubber->isSliderDown()) {
-                m_musicScrubber->setValue((int)((double)t / (double)m_trackDuration * 1000.0));
+                m_musicScrubber->setValue(
+                    (int)((double)t / (double)m_trackDuration * 1000.0));
                 auto fmt = [](int64_t ms) -> QString {
                     int s = (int)(ms / 1000);
-                    return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
+                    return QString("%1:%2").arg(s/60).arg(s%60,2,10,QChar('0'));
                 };
                 m_musicTimeLbl->setText(fmt(t) + " / " + fmt(m_trackDuration));
             }
         }
     }
 
-    // ── End-of-track detection ─────────────────────────────────
+    // ── End-of-track detection (Bug 3 fix: use music-specific API + loop logic) ─
     if (m_activeIndex < 0 || m_endHandled) return;
-    if (m_seekCooldown > 0) { --m_seekCooldown; return; } // ignore state after seek
-    int state = lyrics_renderer_mv_get_state();
-    if (state != kMediaStateEnded) return;
+    if (m_seekCooldown > 0) { --m_seekCooldown; return; }
+    if (lyrics_renderer_music_get_state() != kMediaStateEnded) return;
 
     m_endHandled = true;
 
-    // Always auto-advance to next track (playlist behaviour)
+    if (m_loopMode == LoopMode::One) {
+        // Replay the same track
+        playMusicAt(m_activeIndex);
+        return;
+    }
+
     int next = m_activeIndex + 1;
     if (next < m_items.size()) {
         playMusicAt(next);
+    } else if (m_loopMode == LoopMode::All) {
+        playMusicAt(0);  // wrap to first track
     } else {
-        // End of playlist — stop
+        // No loop — stop
         setActiveRow(-1);
         m_musicScrubber->setValue(0);
         m_musicScrubber->setEnabled(false);
         m_musicTimeLbl->setText("0:00 / 0:00");
-        lyrics_renderer_mv_clear();
+        lyrics_renderer_mv_music_clear();
+        emit stopped();
     }
 }
 
@@ -744,7 +752,7 @@ void MvMusicPanel::stopPlayback()
     m_musicPaused   = false;
     m_seekCooldown  = 0;
     m_trackDuration = 0;
-    m_playPauseBtn->setText(QString::fromUtf8("\u25B6"));
+    m_playPauseBtn->setText(QString::fromUtf8("▶"));
     m_musicScrubber->setValue(0);
     m_musicScrubber->setEnabled(false);
     m_musicTimeLbl->setText("0:00 / 0:00");
@@ -752,8 +760,7 @@ void MvMusicPanel::stopPlayback()
 
 QString MvMusicPanel::statePath() const
 {
-    QString dir = QStandardPaths::writableLocation(
-                      QStandardPaths::AppDataLocation)
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
                   + "/obs-lyrics-dock";
     QDir().mkpath(dir);
     return dir + "/mv-music.json";
@@ -763,10 +770,11 @@ void MvMusicPanel::saveState()
 {
     QJsonArray arr;
     for (const auto &path : m_items) arr.append(path);
-    QJsonObject obj; obj["items"] = arr;
+    QJsonObject obj;
+    obj["items"]    = arr;
+    obj["loopMode"] = (int)m_loopMode;
     QFile f(statePath());
-    if (f.open(QIODevice::WriteOnly))
-        f.write(QJsonDocument(obj).toJson());
+    if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(obj).toJson());
 }
 
 void MvMusicPanel::loadState()
@@ -775,9 +783,10 @@ void MvMusicPanel::loadState()
     if (!f.open(QIODevice::ReadOnly)) return;
     auto doc = QJsonDocument::fromJson(f.readAll());
     if (doc.isNull()) return;
+    auto obj = doc.object();
     m_items.clear();
     m_list->clear();
-    for (const auto &v : doc.object()["items"].toArray()) {
+    for (const auto &v : obj["items"].toArray()) {
         QString path = v.toString();
         if (!QFile::exists(path)) continue;
         m_items << path;
@@ -785,13 +794,476 @@ void MvMusicPanel::loadState()
         it->setData(Qt::UserRole, path);
         m_list->addItem(it);
     }
+    int lm = obj["loopMode"].toInt(0);
+    m_loopMode = (lm == 1) ? LoopMode::All : (lm == 2) ? LoopMode::One : LoopMode::None;
+    applyLoopButtonStyle();
 }
 
 // ══════════════════════════════════════════════════════════════
-// MvTab
+// PictureCard
 // ══════════════════════════════════════════════════════════════
 
-MvTab::MvTab(QWidget *parent) : QWidget(parent)
+PictureCard::PictureCard(const QString &path, int index, QWidget *parent)
+    : QFrame(parent), m_path(path), m_index(index)
+{
+    setFixedSize(CARD_W, CARD_H);
+    setFrameShape(QFrame::StyledPanel);
+    setStyleSheet(
+        "QFrame{background:#252525;border:1px solid #3a3a3a;border-radius:3px;}"
+        "QFrame:hover{border-color:#666;}");
+
+    auto *vl = new QVBoxLayout(this);
+    vl->setContentsMargins(4, 4, 4, 4);
+    vl->setSpacing(2);
+
+    // ── Checkbox row ──────────────────────────────────────────
+    m_check = new QCheckBox(this);
+    m_check->setStyleSheet("QCheckBox{color:#aaa;font-size:8px;}");
+    m_check->setToolTip("Include in slideshow");
+    vl->addWidget(m_check);
+
+    // ── Thumbnail ─────────────────────────────────────────────
+    m_thumb = new QLabel(this);
+    m_thumb->setFixedSize(THUMB_W, THUMB_H);
+    m_thumb->setAlignment(Qt::AlignCenter);
+    m_thumb->setStyleSheet("background:#1a1a1a;border-radius:2px;");
+    vl->addWidget(m_thumb);
+
+    // ── Filename ──────────────────────────────────────────────
+    m_nameLbl = new QLabel(this);
+    m_nameLbl->setStyleSheet("color:#aaa;font-size:8px;");
+    m_nameLbl->setAlignment(Qt::AlignCenter);
+    vl->addWidget(m_nameLbl);
+
+    buildThumbnail();
+
+    connect(m_check, &QCheckBox::toggled, this, [this](bool checked){
+        emit checkToggled(m_index, checked);
+    });
+}
+
+void PictureCard::buildThumbnail()
+{
+    QImageReader reader(m_path);
+    reader.setAutoTransform(true);
+    QImage img = reader.read();
+    if (!img.isNull()) {
+        QPixmap px = QPixmap::fromImage(
+            img.scaled(THUMB_W, THUMB_H, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_thumb->setPixmap(px);
+    } else {
+        m_thumb->setText("?");
+        m_thumb->setStyleSheet("background:#1a1a1a;border-radius:2px;color:#666;font-size:20px;");
+    }
+    QString name = QFileInfo(m_path).fileName();
+    QFontMetrics fm(m_nameLbl->font());
+    m_nameLbl->setText(fm.elidedText(name, Qt::ElideMiddle, THUMB_W));
+}
+
+void PictureCard::setActive(bool active)
+{
+    m_active = active;
+    setStyleSheet(active
+        ? "QFrame{background:#1a2a3a;border:2px solid #4da6ff;border-radius:3px;}"
+        : "QFrame{background:#252525;border:1px solid #3a3a3a;border-radius:3px;}"
+          "QFrame:hover{border-color:#666;}");
+}
+
+bool PictureCard::isChecked() const { return m_check && m_check->isChecked(); }
+
+void PictureCard::setChecked(bool checked) { if (m_check) m_check->setChecked(checked); }
+
+void PictureCard::mousePressEvent(QMouseEvent *e)
+{
+    // If the click is on the checkbox, let it handle its own toggle
+    if (m_check && m_check->geometry().contains(e->pos())) {
+        QFrame::mousePressEvent(e);
+        return;
+    }
+    if (e->button() == Qt::LeftButton) {
+        emit clicked(m_index);
+    } else if (e->button() == Qt::RightButton) {
+        QMenu menu(this);
+        auto *removeAct = menu.addAction(
+            style()->standardIcon(QStyle::SP_TrashIcon), "Remove");
+        if (menu.exec(mapToGlobal(e->pos())) == removeAct)
+            emit removeRequested(m_index);
+    }
+    QFrame::mousePressEvent(e);
+}
+
+// ══════════════════════════════════════════════════════════════
+// MusicPicturePanel
+// ══════════════════════════════════════════════════════════════
+
+MusicPicturePanel::MusicPicturePanel(QWidget *parent) : QWidget(parent)
+{
+    buildUi();
+    loadState();
+}
+
+void MusicPicturePanel::buildUi()
+{
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    // ── Top bar ───────────────────────────────────────────────
+    auto *topBar = new QWidget;
+    topBar->setStyleSheet("background:#222;border-bottom:1px solid #333;");
+    auto *topL = new QHBoxLayout(topBar);
+    topL->setContentsMargins(6, 4, 6, 4);
+
+    auto *addBtn = new QPushButton("+ Add Pictures");
+    addBtn->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+
+    m_slideshowBtn = new QPushButton(QString::fromUtf8("▶ Slideshow"));
+    m_slideshowBtn->setCheckable(true);
+    m_slideshowBtn->setEnabled(false); // enabled only when ≥2 boxes checked
+    m_slideshowBtn->setToolTip("Start / stop the picture slideshow (requires 2+ checked)");
+    m_slideshowBtn->setStyleSheet(
+        "QPushButton{background:#2a2a2a;color:#888;"
+        "border:1px solid #444;border-radius:3px;padding:2px 8px;}"
+        "QPushButton:checked{background:#1a3a1a;color:#6fbf6f;"
+        "border:1px solid #3a8a3a;}"
+        "QPushButton:disabled{color:#444;border-color:#333;}"
+        "QPushButton:hover:!disabled{border-color:#888;}");
+
+    m_blankBtn = new QPushButton(QString::fromUtf8("■ Blank"));
+    m_blankBtn->setFixedSize(68, 22);
+    m_blankBtn->setStyleSheet(
+        "QPushButton{background:#4a1a1a;color:#ff6b6b;"
+        "border:1px solid #8b2020;border-radius:3px;padding:0 2px;}"
+        "QPushButton:hover{background:#6a2020;}");
+
+    topL->addWidget(addBtn);
+    topL->addWidget(m_slideshowBtn);
+    topL->addStretch();
+    topL->addWidget(m_blankBtn);
+    root->addWidget(topBar);
+
+    // ── Thumbnail grid ────────────────────────────────────────
+    m_scrollArea = new QScrollArea;
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setStyleSheet("QScrollArea{background:#181818;border:none;}");
+    m_container = new QWidget;
+    m_container->setStyleSheet("background:#181818;");
+    m_container->installEventFilter(this);
+    m_grid = new QGridLayout(m_container);
+    m_grid->setContentsMargins(6, 6, 6, 6);
+    m_grid->setSpacing(6);
+    m_grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    m_scrollArea->setWidget(m_container);
+    root->addWidget(m_scrollArea, 1);
+
+    // ── Bottom bar: slideshow interval ────────────────────────
+    auto *bottomBar = new QWidget;
+    bottomBar->setStyleSheet("background:#1e1e1e;border-top:1px solid #333;");
+    auto *bottomL = new QHBoxLayout(bottomBar);
+    bottomL->setContentsMargins(8, 4, 8, 4);
+    auto *intervalLbl = new QLabel("Slideshow Interval:");
+    intervalLbl->setStyleSheet("color:#aaa;font-size:9px;");
+    m_intervalSpin = new QSpinBox;
+    m_intervalSpin->setRange(1, 3600);
+    m_intervalSpin->setValue(10);
+    m_intervalSpin->setSuffix(" s");
+    m_intervalSpin->setFixedWidth(72);
+    m_intervalSpin->setToolTip("Time between pictures in slideshow mode (when 2+ are checked)");
+    auto *intervalNote = new QLabel("(check 2+ pictures to start)");
+    intervalNote->setStyleSheet("color:#555;font-size:8px;");
+    bottomL->addWidget(intervalLbl);
+    bottomL->addWidget(m_intervalSpin);
+    bottomL->addWidget(intervalNote);
+    bottomL->addStretch();
+    root->addWidget(bottomBar);
+
+    // ── Slideshow timer ───────────────────────────────────────
+    m_slideshowTimer = new QTimer(this);
+    m_slideshowTimer->setSingleShot(false);
+    connect(m_slideshowTimer, &QTimer::timeout, this, &MusicPicturePanel::onSlideshowTimer);
+
+    // Update timer interval when spinbox changes (only if timer is running)
+    connect(m_intervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v){
+        if (m_slideshowTimer->isActive()) {
+            m_slideshowTimer->setInterval(v * 1000);
+        }
+        saveState();
+    });
+
+    connect(addBtn,         &QPushButton::clicked,  this, &MusicPicturePanel::onAddPictures);
+    connect(m_blankBtn,     &QPushButton::clicked,  this, &MusicPicturePanel::onBlank);
+    connect(m_slideshowBtn, &QPushButton::toggled,  this, [this](bool on){
+        if (on) {
+            // Start slideshow from the first checked picture
+            QList<int> checked;
+            for (int i = 0; i < m_cards.size(); ++i)
+                if (m_cards[i]->isChecked()) checked << i;
+            if (checked.size() < 2) {
+                // Shouldn't happen (button disabled), but guard anyway
+                QSignalBlocker blk(m_slideshowBtn);
+                m_slideshowBtn->setChecked(false);
+                return;
+            }
+            m_slideshowPos = 0;
+            pushPicture(checked[0]);
+            m_slideshowTimer->start(m_intervalSpin->value() * 1000);
+            m_slideshowBtn->setText(QString::fromUtf8("■ Stop Slideshow"));
+        } else {
+            m_slideshowTimer->stop();
+            m_slideshowBtn->setText(QString::fromUtf8("▶ Slideshow"));
+        }
+    });
+}
+
+bool MusicPicturePanel::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_container && event->type() == QEvent::Resize) {
+        int nc = calcCols();
+        if (nc != m_currentCols) { m_currentCols = nc; rebuildGrid(); }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+int MusicPicturePanel::calcCols() const
+{
+    int available = m_container->width() - 12;
+    int colWidth  = PictureCard::CARD_W + 6;
+    return qMax(1, available / colWidth);
+}
+
+void MusicPicturePanel::rebuildGrid()
+{
+    // Save checked state before rebuilding
+    QList<bool> checkedState;
+    for (auto *c : m_cards) checkedState << c->isChecked();
+
+    for (auto *c : m_cards) { m_grid->removeWidget(c); c->deleteLater(); }
+    m_cards.clear();
+    int col = 0, row = 0;
+    for (int i = 0; i < m_paths.size(); ++i) {
+        auto *card = new PictureCard(m_paths[i], i, m_container);
+        if (i < checkedState.size()) card->setChecked(checkedState[i]);
+        connect(card, &PictureCard::clicked,        this, &MusicPicturePanel::onCardClicked);
+        connect(card, &PictureCard::checkToggled,   this, &MusicPicturePanel::onCheckToggled);
+        connect(card, &PictureCard::removeRequested,this, &MusicPicturePanel::onCardRemoveRequested);
+        card->setActive(i == m_activeIndex);
+        m_grid->addWidget(card, row, col);
+        m_cards << card;
+        if (++col >= m_currentCols) { col = 0; ++row; }
+    }
+    updateSlideshowState(); // refresh button enabled state
+}
+
+void MusicPicturePanel::setActiveCard(int index)
+{
+    m_activeIndex = index;
+    for (auto *c : m_cards) c->setActive(c->index() == index);
+}
+
+void MusicPicturePanel::pushPicture(int index)
+{
+    if (index < 0 || index >= m_paths.size()) return;
+    setActiveCard(index);
+    lyrics_renderer_media_push(m_paths[index], 500);
+    emit pictureActivated();
+}
+
+void MusicPicturePanel::updateSlideshowState()
+{
+    // Count checked cards and update button enabled state.
+    // The slideshow is NOT auto-started — user must press the button explicitly.
+    int checkedCount = 0;
+    for (auto *c : m_cards)
+        if (c->isChecked()) ++checkedCount;
+
+    bool canSlideshow = (checkedCount >= 2);
+    m_slideshowBtn->setEnabled(canSlideshow);
+
+    // If slideshow was running but now < 2 checked, stop it
+    if (!canSlideshow && m_slideshowTimer->isActive()) {
+        m_slideshowTimer->stop();
+        QSignalBlocker blk(m_slideshowBtn);
+        m_slideshowBtn->setChecked(false);
+        m_slideshowBtn->setText(QString::fromUtf8("▶ Slideshow"));
+    }
+}
+
+void MusicPicturePanel::onAddPictures()
+{
+    QStringList files = QFileDialog::getOpenFileNames(
+        this, "Add Pictures", QString(), IMAGE_FILTER);
+    if (files.isEmpty()) return;
+    for (const auto &f : files) {
+        if (QFile::exists(f)) m_paths << f;
+    }
+    rebuildGrid();
+    saveState();
+}
+
+void MusicPicturePanel::onCardClicked(int index)
+{
+    // Immediately show this picture; stop any running slideshow
+    m_slideshowTimer->stop();
+    pushPicture(index);
+}
+
+void MusicPicturePanel::onCheckToggled(int /*index*/, bool /*checked*/)
+{
+    updateSlideshowState(); // updates button enabled state only
+    saveState();
+}
+
+void MusicPicturePanel::onCardRemoveRequested(int index)
+{
+    if (index < 0 || index >= m_paths.size()) return;
+    bool wasActive = (m_activeIndex == index);
+    if (wasActive) {
+        m_slideshowTimer->stop();
+        lyrics_renderer_media_clear();
+        m_activeIndex = -1;
+    } else if (m_activeIndex > index) {
+        m_activeIndex--;
+    }
+    m_paths.removeAt(index);
+    rebuildGrid();
+    saveState();
+}
+
+void MusicPicturePanel::onBlank()
+{
+    m_slideshowTimer->stop();
+    setActiveCard(-1);
+    lyrics_renderer_media_clear();
+}
+
+void MusicPicturePanel::onSlideshowTimer()
+{
+    QList<int> checked;
+    for (int i = 0; i < m_cards.size(); ++i)
+        if (m_cards[i]->isChecked()) checked << i;
+
+    if (checked.size() < 2) {
+        m_slideshowTimer->stop();
+        if (m_slideshowBtn) {
+            QSignalBlocker blk(m_slideshowBtn);
+            m_slideshowBtn->setChecked(false);
+            m_slideshowBtn->setText(QString::fromUtf8("▶ Slideshow"));
+        }
+        return;
+    }
+    // Advance to next checked picture (wrap around)
+    m_slideshowPos = (m_slideshowPos + 1) % checked.size();
+    pushPicture(checked[m_slideshowPos]);
+}
+
+void MusicPicturePanel::stopSlideshow()
+{
+    m_slideshowTimer->stop();
+    setActiveCard(-1);
+    if (m_slideshowBtn) {
+        QSignalBlocker blk(m_slideshowBtn);
+        m_slideshowBtn->setChecked(false);
+        m_slideshowBtn->setText(QString::fromUtf8("▶ Slideshow"));
+    }
+}
+
+void MusicPicturePanel::clearDisplay()
+{
+    m_slideshowTimer->stop();
+    setActiveCard(-1);
+    if (m_slideshowBtn) {
+        QSignalBlocker blk(m_slideshowBtn);
+        m_slideshowBtn->setChecked(false);
+        m_slideshowBtn->setText(QString::fromUtf8("▶ Slideshow"));
+    }
+    lyrics_renderer_media_clear();
+}
+
+void MusicPicturePanel::clearActiveCard()
+{
+    // UI-only: remove highlight without calling renderer
+    setActiveCard(-1);
+}
+
+QString MusicPicturePanel::statePath() const
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                  + "/obs-lyrics-dock";
+    QDir().mkpath(dir);
+    return dir + "/music-pictures.json";
+}
+
+void MusicPicturePanel::saveState()
+{
+    QJsonArray paths;
+    for (const auto &p : m_paths) paths.append(p);
+
+    QJsonArray checks;
+    for (auto *c : m_cards) checks.append(c->isChecked());
+
+    QJsonObject obj;
+    obj["paths"]    = paths;
+    obj["checks"]   = checks;
+    obj["interval"] = m_intervalSpin->value();
+    QFile f(statePath());
+    if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(obj).toJson());
+}
+
+void MusicPicturePanel::loadState()
+{
+    QFile f(statePath());
+    if (!f.open(QIODevice::ReadOnly)) return;
+    auto doc = QJsonDocument::fromJson(f.readAll());
+    if (doc.isNull()) return;
+    QJsonObject obj = doc.object();
+    m_paths.clear();
+    for (const auto &v : obj["paths"].toArray()) {
+        QString p = v.toString();
+        if (QFile::exists(p)) m_paths << p;
+    }
+    if (obj.contains("interval"))
+        m_intervalSpin->setValue(obj["interval"].toInt());
+
+    rebuildGrid();
+
+    // Restore checked state
+    QJsonArray checks = obj["checks"].toArray();
+    for (int i = 0; i < qMin(m_cards.size(), (int)checks.size()); ++i)
+        m_cards[i]->setChecked(checks[i].toBool());
+}
+
+// ══════════════════════════════════════════════════════════════
+// VideoTab
+// ══════════════════════════════════════════════════════════════
+
+VideoTab::VideoTab(QWidget *parent) : QWidget(parent)
+{
+    auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    m_videoPanel = new MvVideoPanel;
+    root->addWidget(m_videoPanel);
+
+    connect(m_videoPanel, &MvVideoPanel::videoStarted, this, [this](){
+        emit playbackStarted();
+    });
+}
+
+void VideoTab::stopPlayback()
+{
+    // UI-only: deselect card and hide controls.
+    // Do NOT call lyrics_renderer_mv_clear() here — the renderer source is
+    // shared with the Music tab (MV source). Calling clear() after Music tab
+    // starts would kill music that was just pushed.
+    if (m_videoPanel) m_videoPanel->stopPlayback();
+}
+
+// ══════════════════════════════════════════════════════════════
+// MusicTab
+// ══════════════════════════════════════════════════════════════
+
+MusicTab::MusicTab(QWidget *parent) : QWidget(parent)
 {
     auto *root = new QHBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -799,11 +1271,11 @@ MvTab::MvTab(QWidget *parent) : QWidget(parent)
 
     auto *splitter = new QSplitter(Qt::Horizontal);
 
-    auto *videoGroup  = new QGroupBox("Videos");
-    auto *videoLayout = new QVBoxLayout(videoGroup);
-    videoLayout->setContentsMargins(0, 4, 0, 0);
-    m_videoPanel = new MvVideoPanel;
-    videoLayout->addWidget(m_videoPanel);
+    auto *picGroup  = new QGroupBox("Background Pictures");
+    auto *picLayout = new QVBoxLayout(picGroup);
+    picLayout->setContentsMargins(0, 4, 0, 0);
+    m_picturePanel = new MusicPicturePanel;
+    picLayout->addWidget(m_picturePanel);
 
     auto *musicGroup  = new QGroupBox("Music");
     auto *musicLayout = new QVBoxLayout(musicGroup);
@@ -811,7 +1283,7 @@ MvTab::MvTab(QWidget *parent) : QWidget(parent)
     m_musicPanel = new MvMusicPanel;
     musicLayout->addWidget(m_musicPanel);
 
-    splitter->addWidget(videoGroup);
+    splitter->addWidget(picGroup);
     splitter->addWidget(musicGroup);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
@@ -819,34 +1291,43 @@ MvTab::MvTab(QWidget *parent) : QWidget(parent)
 
     root->addWidget(splitter);
 
-    // ── Mutual exclusion between panels ──────────────────────
-    // Video starts → stop music panel UI (renderer source is replaced anyway)
-    connect(m_videoPanel, &MvVideoPanel::videoStarted, this, [this](){
-        m_musicPanel->stopPlayback();
-        emit playbackStarted();
-    });
-    // Music starts → stop video panel UI
+    // Music start doesn't stop pictures (they coexist by design)
     connect(m_musicPanel, &MvMusicPanel::musicStarted, this, [this](){
-        m_videoPanel->stopPlayback();
         emit playbackStarted();
     });
+    // Picture activation also signals playback started (for cross-tab exclusion with VideoTab)
+    connect(m_picturePanel, &MusicPicturePanel::pictureActivated, this, [this](){
+        emit playbackStarted();
+    });
+    // When music is stopped (stop button or playlist end), also blank the picture slideshow
+    connect(m_musicPanel, &MvMusicPanel::stopped,
+            m_picturePanel, &MusicPicturePanel::clearDisplay);
 }
 
-void MvTab::stopPlayback()
+void MusicTab::saveState()
 {
-    lyrics_renderer_mv_clear();
-    m_videoPanel->stopPlayback();
-    m_musicPanel->stopPlayback();
+    if (m_picturePanel) m_picturePanel->saveState();
+    if (m_musicPanel)   m_musicPanel->saveState();
 }
 
-void MvTab::saveState()
+void MusicTab::loadState()
 {
-    m_videoPanel->saveState();
-    m_musicPanel->saveState();
+    if (m_picturePanel) m_picturePanel->loadState();
+    if (m_musicPanel)   m_musicPanel->loadState();
 }
 
-void MvTab::loadState()
+void MusicTab::stopPlayback()
 {
-    m_videoPanel->loadState();
-    m_musicPanel->loadState();
+    // Full stop: clear OBS picture layer, stop slideshow, stop music, reset UI.
+    if (m_picturePanel) m_picturePanel->clearDisplay();  // stops timer + clears picture OBS layer
+    if (m_musicPanel)   m_musicPanel->stopPlayback();    // resets music UI
+    lyrics_renderer_mv_music_clear();                    // destroy the OBS music source
+}
+
+void MusicTab::clearActiveUI()
+{
+    // Called when Video tab takes over. Stop slideshow UI and kill the OBS music source.
+    if (m_picturePanel) m_picturePanel->stopSlideshow(); // stop timer, deselect card
+    if (m_musicPanel)   m_musicPanel->stopPlayback();    // reset music UI
+    lyrics_renderer_mv_music_clear();                    // destroy OBS music source
 }

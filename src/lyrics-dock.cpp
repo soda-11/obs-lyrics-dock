@@ -121,8 +121,16 @@ SongLibraryPopup::SongLibraryPopup(QWidget *parent) : QDialog(parent)
             this, &SongLibraryPopup::onSearch);
     connect(m_list, &QListWidget::currentRowChanged,
             this, [this](int){ onSelectionChanged(); });
+    // Double-click toggles: add if not in sequence, remove if already in sequence.
     connect(m_list, &QListWidget::itemDoubleClicked,
-            this, [this](){ onAdd(); });
+            this, [this](){
+                auto *item = m_list->currentItem();
+                if (!item) return;
+                QString id = item->data(Qt::UserRole).toString();
+                if (id.isEmpty()) return;
+                if (m_sequenceIds.contains(id)) onRemove();
+                else                            onAdd();
+            });
     connect(m_addBtn,   &QPushButton::clicked, this, &SongLibraryPopup::onAdd);
     connect(m_removeBtn,&QPushButton::clicked, this, &SongLibraryPopup::onRemove);
     connect(m_deleteBtn,&QPushButton::clicked, this, &SongLibraryPopup::onDeleteSong);
@@ -518,16 +526,16 @@ void LyricsDock::pushSlideFromRemote(const QString &songTitle,
         if (!song) continue;
         if (song->title != songTitle) continue;
 
-        // Select that row (loads its slides into the panel)
-        if (m_sequenceList->currentRow() != row) {
+        // Select that row in the list and load its slides if not already loaded.
+        if (m_sequenceList->currentRow() != row)
             m_sequenceList->setCurrentRow(row);
-            // loadSongSlides is triggered by onSequenceSongSelected
-        }
+
+        // Ensure slides are loaded for this song (onSequenceSongSelected no longer
+        // calls loadSongSlides automatically; we must do it here for remote pushes).
+        if (m_currentSong.id != m_sequenceSongIds[row])
+            loadSequenceRowSlides(row);
 
         // The slideIndex from the remote is GLOBAL across all songs.
-        // We need to find which local slide index within this song it maps to.
-        // Use the loop's row variable — NOT m_sequenceList->currentRow()
-        // which may not yet reflect the setCurrentRow() call above.
         int localIdx = slideIndex - computeGlobalSlideOffset(row);
 
         // Highlight the tile and push to renderer
@@ -544,6 +552,16 @@ void LyricsDock::applyScriptureFromRemote(const QString &title, const QString &t
 {
     if (m_scriptureTab)
         m_scriptureTab->applyFromRemote(title, text);
+}
+
+void LyricsDock::stopAllMedia()
+{
+    // Full stop — called when OBS switches to a scene without the Lyrics source.
+    if (m_videoTab)    m_videoTab->stopPlayback();
+    if (m_musicTab)    m_musicTab->stopPlayback();
+    if (m_mediaGallery) m_mediaGallery->stopPlayback();
+    lyrics_renderer_mv_clear();
+    lyrics_renderer_media_clear();
 }
 
 void LyricsDock::saveState()
@@ -572,7 +590,8 @@ void LyricsDock::saveState()
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(obj).toJson());
     if (m_mediaGallery)  m_mediaGallery->saveState();
-    if (m_mvTab)         m_mvTab->saveState();
+    if (m_videoTab)      m_videoTab->saveState();
+    if (m_musicTab)      m_musicTab->saveState();
     if (m_scriptureTab)  m_scriptureTab->saveState();
 }
 
@@ -682,8 +701,9 @@ void LyricsDock::buildUi()
         "Open song library to add/remove songs from sequence");
 
     m_sequenceList = new QListWidget;
-    m_sequenceList->setDragDropMode(QAbstractItemView::InternalMove);
-    m_sequenceList->setDefaultDropAction(Qt::MoveAction);
+    m_sequenceList->setDragEnabled(false);
+    m_sequenceList->setAcceptDrops(false);
+    m_sequenceList->setDragDropMode(QAbstractItemView::NoDragDrop);
     m_sequenceList->setStyleSheet(
         "QListWidget { background: #1e1e1e; }"
         "QListWidget::item:selected { background: #1e6bb8; }");
@@ -941,8 +961,11 @@ void LyricsDock::buildUi()
     m_scriptureTab = new ScriptureTab;
     tabs->addTab(m_scriptureTab, "Scripture");
 
-    m_mvTab = new MvTab;
-    tabs->addTab(m_mvTab, "MV");
+    m_videoTab = new VideoTab;
+    tabs->addTab(m_videoTab, "Video");
+
+    m_musicTab = new MusicTab;
+    tabs->addTab(m_musicTab, "Music-Photo-SlideShow");
 
     m_wsTab = new WsTab;
     tabs->addTab(m_wsTab, "WebSocket");
@@ -1051,33 +1074,45 @@ void LyricsDock::buildUi()
                 saveState();
             });
 
-    // ── Cross-tab: Lyrics gallery media played → stop MV, deselect Scripture gallery ──
-    // We use clearActiveCard (UI-only) so the new media path is not immediately cleared.
+    // ── Cross-tab: Lyrics gallery background played → UI-only stops on other tabs.
+    // Do NOT call lyrics_renderer_mv_clear() — music/video use the MV source and
+    // should not be killed when the background layer changes.
     connect(m_mediaGallery, &MediaGallery::mediaActivated, this, [this](){
-        m_mvTab->stopPlayback();
-        m_scriptureTab->clearActiveCard(); // UI deselect only
+        m_videoTab->stopPlayback();           // UI-only (no renderer call)
+        m_musicTab->clearActiveUI();          // stop slideshow, deselect picture; keep music
+        m_scriptureTab->clearActiveCard();
     });
 
-    // ── Cross-tab: MV starts → clear text overlays, deselect both galleries
-    // Do NOT call stopPlayback() on either gallery — that would chain into
-    // lyrics_renderer_media_clear(), which forces s_mvMode=false and destroys
-    // the media source that MV just pushed. Use clearActiveCard() (UI-only).
-    connect(m_mvTab, &MvTab::playbackStarted, this, [this](){
-        lyrics_renderer_scripture_clear(); // clear scripture overlay on canvas
+    // ── Cross-tab: Video tab starts → clear lyrics, deselect galleries, stop Music UI.
+    // The MV source is naturally replaced by the video push — no explicit clear needed.
+    connect(m_videoTab, &VideoTab::playbackStarted, this, [this](){
+        lyrics_renderer_clear();              // hide any lyrics text on canvas
+        lyrics_renderer_scripture_clear();
         m_mediaGallery->clearActiveCard();
-        m_scriptureTab->clearActiveCard(); // UI-only — MV push already owns the source
+        m_musicTab->clearActiveUI();          // stop slideshow, deselect picture; keep music UI quiet
+        m_scriptureTab->clearActiveCard();
     });
 
-    // ── Cross-tab: Background Stop pressed → also stop MV & Scripture
+    // ── Cross-tab: Music tab starts (music or picture) → clear lyrics, deselect galleries.
+    // The MV source is naturally replaced by the music push — video stops by itself.
+    connect(m_musicTab, &MusicTab::playbackStarted, this, [this](){
+        lyrics_renderer_clear();              // hide lyrics text — Music tab is a no-lyrics zone
+        lyrics_renderer_scripture_clear();
+        m_videoTab->stopPlayback();           // UI-only deselect
+        m_mediaGallery->clearActiveCard();
+        m_scriptureTab->clearActiveCard();
+    });
+
+    // ── Cross-tab: "Stop Background Media" pressed in Lyrics tab → only stop the
+    // Lyrics gallery background; do NOT touch Video/Music tabs (separate controls).
     connect(m_mediaGallery, &MediaGallery::stopAllRequested, this, [this](){
-        m_mvTab->stopPlayback();
         m_scriptureTab->stopPlayback();
     });
 
-    // ── Cross-tab: Scripture gallery activates → deselect Lyrics gallery, stop MV
+    // ── Cross-tab: Scripture gallery activates → deselect Lyrics gallery, stop Video UI
     connect(m_scriptureTab, &ScriptureTab::playbackStarted, this, [this](){
-        m_mediaGallery->clearActiveCard(); // UI deselect only
-        m_mvTab->stopPlayback();
+        m_mediaGallery->clearActiveCard();
+        m_videoTab->stopPlayback();           // UI-only
     });
 
     // ── Combined media list broadcast (Lyrics + Scripture galleries) ──
@@ -1345,18 +1380,21 @@ void LyricsDock::onAddToSequence()
     saveState();
     broadcastSequence();
 
-    // Force reload slides for currently selected row
+    // Update button states and reload slides for currently selected row
     // (row may not have changed numerically but song may have been removed above)
-    onSequenceSongSelected(m_sequenceList->currentRow());
+    int curRow = m_sequenceList->currentRow();
+    onSequenceSongSelected(curRow);
+    loadSequenceRowSlides(curRow);
 }
 
 void LyricsDock::onRemoveFromSequence()
 {
     int row = m_sequenceList->currentRow();
     removeSequenceRow(row);
-    // Force update of slides for the new selection
+    // Update button states and reload slides for the new selection
     int newRow = m_sequenceList->currentRow();
     onSequenceSongSelected(newRow);
+    loadSequenceRowSlides(newRow);
 }
 
 void LyricsDock::onMoveSequenceUp()
@@ -1392,14 +1430,17 @@ void LyricsDock::onSequenceSongSelected(int row)
     m_seqEditBtn->setEnabled(has);
 
     if (!has) { clearSlideGrid(); return; }
+    loadSequenceRowSlides(row);
+}
+
+void LyricsDock::loadSequenceRowSlides(int row)
+{
+    bool has = (row >= 0 && row < m_sequenceSongIds.size());
+    if (!has) { clearSlideGrid(); return; }
     auto *song = SongManager::instance().findById(m_sequenceSongIds[row]);
     if (!song) { clearSlideGrid(); return; }
 
-    // Compute global slide offset: sum of all slide counts for songs before this row.
-    // Pass row explicitly — do NOT rely on m_sequenceList->currentRow() which may
-    // be stale during signal dispatch or when called manually (e.g. after add/remove).
     m_currentSongSlideOffset = computeGlobalSlideOffset(row);
-
     m_currentSong = *song;
     loadSongSlides(m_currentSong);
 }
@@ -1552,6 +1593,30 @@ void LyricsDock::onPrevSlide()
     if (m_slides.isEmpty() || m_activeSlide <= 0) return;
     setActiveSlide(m_activeSlide - 1);
     pushCurrentSlide();
+}
+
+// ── Hotkey-accessible actions ─────────────────────────────────
+void LyricsDock::activateNextSlide()  { onNextSlide(); }
+void LyricsDock::activatePrevSlide()  { onPrevSlide(); }
+
+void LyricsDock::activateNextSong()
+{
+    int row = m_sequenceList->currentRow();
+    if (row < m_sequenceList->count() - 1)
+        m_sequenceList->setCurrentRow(row + 1);
+}
+
+void LyricsDock::activatePrevSong()
+{
+    int row = m_sequenceList->currentRow();
+    if (row > 0)
+        m_sequenceList->setCurrentRow(row - 1);
+}
+
+void LyricsDock::activateGalleryMedia(int oneBased)
+{
+    if (m_mediaGallery)
+        m_mediaGallery->activateByPosition(oneBased);
 }
 
 void LyricsDock::onZoomIn()

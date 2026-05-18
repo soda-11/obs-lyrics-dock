@@ -26,6 +26,8 @@ public:
     void setIndex(int i){ m_index=i; }
     int  index() const { return m_index; }
     const MediaItem &item() const { return m_item; }
+    // 0 = hide badge, 1-6 = show number overlay in top-right of thumbnail.
+    void setPositionBadge(int badge);
 signals:
     void clicked(int index);
     void removeRequested(int index);
@@ -43,8 +45,10 @@ private:
     MediaItem  m_item;
     int        m_index;
     bool       m_active=false;
+    int        m_badge=0;
     QLabel    *m_thumb;
     QLabel    *m_nameLbl;
+    QLabel    *m_badgeLbl=nullptr;
     QPoint     m_dragStartPos;
     bool       m_dragging=false;
 public:
@@ -83,6 +87,8 @@ public slots:
     void stopPlayback();
     // UI-only deselect (no renderer call). Used when MV starts.
     void clearActiveCard();
+    // Activate media at 1-based position (used by OBS hotkeys).
+    void activateByPosition(int oneBased);
 
 private slots:
     void onAddMedia();
@@ -91,6 +97,9 @@ private slots:
     void onCardRemoveRequested(int index);
     void onPlayPause();
     void onPollTimer();
+    void onMoveUp();
+    void onMoveDown();
+    void updateUpDownButtons();
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
@@ -114,6 +123,8 @@ private:
     QSlider     *m_scrubber;
     QLabel      *m_timeLbl;
     QPushButton *m_clearBtn;
+    QToolButton *m_upBtn   = nullptr;
+    QToolButton *m_downBtn = nullptr;
     QSpinBox    *m_fadeSpin;     // fade duration in ms
     QTimer      *m_pollTimer;
 

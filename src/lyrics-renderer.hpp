@@ -44,6 +44,8 @@ void lyrics_renderer_scripture_clear();
 // Calling lyrics_renderer_media_push() exits MV mode automatically.
 void lyrics_renderer_mv_video_push(const QString &filePath, int fadeMs);
 void lyrics_renderer_mv_music_push(const QString &filePath);
+// Stop only the music source — does NOT affect the background picture in srcMedia.
+void lyrics_renderer_mv_music_clear();
 void lyrics_renderer_mv_clear(int fadeMs = 0);
 
 // Returns obs_media_state cast to int, or -1 when MV mode is inactive.
@@ -52,6 +54,14 @@ int  lyrics_renderer_mv_get_state();
 bool lyrics_renderer_mv_get_time(int64_t &timeMs, int64_t &durationMs);
 void lyrics_renderer_mv_set_time(int64_t timeMs);
 void lyrics_renderer_mv_play_pause(bool pause);
+
+// ── Music-specific query/control API ─────────────────────────────────────────
+// Operate on the dedicated musicSrc slot — bypass the s_mvMode guard so they
+// work even when a background picture is simultaneously showing in srcMedia.
+int  lyrics_renderer_music_get_state();
+bool lyrics_renderer_music_get_time(int64_t &timeMs, int64_t &durationMs);
+void lyrics_renderer_music_set_time(int64_t timeMs);
+void lyrics_renderer_music_play_pause(bool pause);
 
 // ── QR Overlay API ────────────────────────────────────────────
 // Show a QR code image (80×80 px PNG) at bottom-right of the OBS canvas.

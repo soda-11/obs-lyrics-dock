@@ -90,14 +90,49 @@ static bool isImageFile(const QString &p)
     return s_imageExts.contains(QFileInfo(p).suffix().toLower());
 }
 
+// ── Scripture text preprocessor ──────────────────────────────────────────────
+// Rules:
+//   • Digits (0-9) outside [...] are replaced with Unicode superscript equivalents.
+//   • Text inside [...] is emitted as-is with the brackets stripped — digits
+//     inside brackets are NOT superscripted (e.g. "[John 3:16]" → "John 3:16").
+static QString applySuperscript(const QString &raw)
+{
+    // Unicode superscript digits ⁰¹²³⁴⁵⁶⁷⁸⁹
+    static const QChar sup[10] = {
+        QChar(0x2070), QChar(0x00B9), QChar(0x00B2), QChar(0x00B3), QChar(0x2074),
+        QChar(0x2075), QChar(0x2076), QChar(0x2077), QChar(0x2078), QChar(0x2079)
+    };
+    QString out;
+    out.reserve(raw.size());
+    bool inBracket = false;
+    for (const QChar c : raw) {
+        if (c == QLatin1Char('[')) {
+            inBracket = true;     // start of escape — drop the '['
+        } else if (c == QLatin1Char(']')) {
+            inBracket = false;    // end of escape — drop the ']'
+        } else if (!inBracket && c.isDigit()) {
+            out += sup[c.digitValue()];
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 // ── Per-instance ──────────────────────────────────────────────
 struct LyricsInstance {
     obs_source_t *self          = nullptr;
 
-    // Current active media child (image_source or ffmpeg_source)
+    // Current active media child (image_source or ffmpeg_source for background pictures/videos)
     obs_source_t *srcMedia      = nullptr;
     bool          mediaIsImg    = false;
     bool          mediaActive   = false;
+
+    // Separate slot for music (VLC or ffmpeg audio source).
+    // Kept completely independent from srcMedia so that showing/changing a
+    // background picture never destroys the music source.
+    obs_source_t *musicSrc      = nullptr;
+    bool          musicActive   = false;
 
     // OBS built-in fade_transition source — handles crossfade between media
     obs_source_t *transitionSrc = nullptr;
@@ -331,6 +366,18 @@ static void destroyMediaChild(LyricsInstance *inst)
     inst->mediaActive = false;
 }
 
+// Tears down the dedicated music child source (separate from srcMedia).
+static void destroyMusicChild(LyricsInstance *inst)
+{
+    if (!inst->musicSrc) return;
+    obs_source_remove_audio_capture_callback(inst->musicSrc, mediaAudioCb, inst);
+    obs_source_dec_active(inst->musicSrc);
+    obs_source_remove_active_child(inst->self, inst->musicSrc);
+    obs_source_release(inst->musicSrc);
+    inst->musicSrc    = nullptr;
+    inst->musicActive = false;
+}
+
 // Creates a new media child, activates it, and starts the OBS
 // fade_transition. fadeMs=0 = instant cut. looping=false for MV sources.
 static void applyMediaPath(LyricsInstance *inst,
@@ -483,7 +530,8 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
       lk.unlock();
       applyMediaPath(inst,med,0); // no fade on first load
       updateTextChildren(inst,settings,ly,sec,ttl);
-      updateScriptureChildren(inst,settings,stit,stxt); }
+      updateScriptureChildren(inst,settings,
+          stit, applySuperscript(stxt)); }
     return inst;
 }
 
@@ -491,6 +539,7 @@ static void src_destroy(void *data)
 {
     auto *inst=static_cast<LyricsInstance*>(data);
     { QMutexLocker lk(&s_mu); s_instances.removeAll(inst); }
+    destroyMusicChild(inst);
     destroyMediaChild(inst);
     if (inst->transitionSrc) {
         obs_source_dec_active(inst->transitionSrc);
@@ -719,7 +768,8 @@ static void src_update(void *data, obs_data_t *settings)
     if (s_scriptureMode) {
         clearChineseChildren(inst, settings);
         updateTextChildren(inst,settings,QString(),QString(),QString());
-        updateScriptureChildren(inst,settings,s_scripTitle,s_scripText);
+        updateScriptureChildren(inst,settings,
+            s_scripTitle, applySuperscript(s_scripText));
     } else if (s_chineseMode) {
         updateScriptureChildren(inst, settings, QString(), QString());
         updateChineseChildren(inst, settings, s_pinyin, s_lyrics, s_english);
@@ -839,8 +889,10 @@ static void src_deactivate(void *data)
     }
     s_mvMode = false; s_mvMusicOnly = false;
     s_mediaPath.clear();
-    for (auto *inst : s_instances)
+    for (auto *inst : s_instances) {
+        destroyMusicChild(inst);
         applyMediaPath(inst, QString(), 0, true);
+    }
 }
 
 static void src_activate(void *data)
@@ -851,8 +903,10 @@ static void src_activate(void *data)
     if (s_mvMode || !s_mediaPath.isEmpty()) {
         s_mvMode = false; s_mvMusicOnly = false;
         s_mediaPath.clear();
-        for (auto *inst : s_instances)
+        for (auto *inst : s_instances) {
+            destroyMusicChild(inst);
             applyMediaPath(inst, QString(), 0, true);
+        }
     }
 }
 
@@ -1029,7 +1083,9 @@ static bool vlcAvailable()
 bool lyrics_renderer_vlc_available() { return vlcAvailable(); }
 
 // Creates a VLC child source playing a single audio file.
-// Falls back to applyMediaPath(ffmpeg_source) if VLC is unavailable.
+// Music is stored in inst->musicSrc — completely independent of inst->srcMedia
+// (the background picture/video slot) so that pushing a picture never kills music.
+// Falls back to an ffmpeg_source stored in musicSrc if VLC is unavailable.
 static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
 {
     obs_data_t *d = obs_data_create();
@@ -1038,8 +1094,30 @@ static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
     obs_data_release(d);
 
     if (!newChild) {
-        // VLC plugin present but source creation failed — fall back
-        applyMediaPath(inst, path, 0, false);
+        // VLC plugin present but source creation failed — try ffmpeg fallback
+        // stored in musicSrc so it still doesn't conflict with srcMedia.
+        obs_data_t *fd = obs_data_create();
+        newChild = obs_source_create_private("ffmpeg_source", "lyrics_music_ffmpeg", fd);
+        obs_data_release(fd);
+        if (!newChild) return;
+
+        obs_source_add_active_child(inst->self, newChild);
+        obs_source_inc_active(newChild);
+        obs_source_add_audio_capture_callback(newChild, mediaAudioCb, inst);
+
+        obs_data_t *cfg = obs_data_create();
+        obs_data_set_string(cfg, "local_file",       path.toUtf8().constData());
+        obs_data_set_bool  (cfg, "is_local_file",    true);
+        obs_data_set_bool  (cfg, "looping",          false);
+        obs_data_set_bool  (cfg, "hw_decode",        true);
+        obs_data_set_bool  (cfg, "restart_on_activate", false);
+        obs_data_set_int   (cfg, "buffering_mb",     2);
+        obs_source_update(newChild, cfg);
+        obs_data_release(cfg);
+
+        destroyMusicChild(inst);
+        inst->musicSrc    = newChild;
+        inst->musicActive = true;
         return;
     }
 
@@ -1065,19 +1143,11 @@ static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
     obs_source_update(newChild, cfg);
     obs_data_release(cfg);
 
-    // Tear down the old child source
-    if (inst->srcMedia && !inst->mediaIsImg)
-        obs_source_remove_audio_capture_callback(
-            inst->srcMedia, mediaAudioCb, inst);
-    if (inst->srcMedia) {
-        obs_source_dec_active(inst->srcMedia);
-        obs_source_remove_active_child(inst->self, inst->srcMedia);
-        obs_source_release(inst->srcMedia);
-    }
+    // Tear down the old music child only — srcMedia (background picture) is untouched
+    destroyMusicChild(inst);
 
-    inst->srcMedia    = newChild;
-    inst->mediaIsImg  = false;
-    inst->mediaActive = true;
+    inst->musicSrc    = newChild;
+    inst->musicActive = true;
 }
 
 void lyrics_renderer_mv_music_push(const QString &filePath)
@@ -1087,9 +1157,10 @@ void lyrics_renderer_mv_music_push(const QString &filePath)
     bool useVlc = vlcAvailable();
 
     QMutexLocker lk(&s_mu);
-    s_mvMode      = true;
-    s_mvMusicOnly = true;    // suppress media layer → no album art on canvas
-    s_mediaPath   = filePath;
+    // NOTE: We do NOT set s_mvMusicOnly=true here. Music is now stored in
+    // inst->musicSrc (separate from transitionSrc/srcMedia), so album art from
+    // the VLC source can never reach the render pipeline. Keeping s_mvMusicOnly=false
+    // ensures any background picture in srcMedia continues to render uninterrupted.
     s_lyrics.clear(); s_section.clear(); s_title.clear();
     s_scriptureMode = false; s_scripTitle.clear(); s_scripText.clear();
     for(auto *inst:s_instances){
@@ -1097,11 +1168,11 @@ void lyrics_renderer_mv_music_push(const QString &filePath)
         updateTextChildren(inst,s,QString(),QString(),QString());
         updateScriptureChildren(inst,s,QString(),QString());
         obs_data_release(s);
-        if (useVlc)
-            applyMusicPathVlc(inst, filePath);  // VLC: accurate MP3 seek
-        else
-            applyMediaPath(inst, filePath, 0, false); // ffmpeg fallback
+        // applyMusicPathVlc stores music in inst->musicSrc; falls back to
+        // ffmpeg in musicSrc if VLC source creation fails.
+        applyMusicPathVlc(inst, filePath);
     }
+    (void)useVlc; // applyMusicPathVlc handles VLC/ffmpeg selection internally
 }
 
 void lyrics_renderer_mv_clear(int fadeMs)
@@ -1110,8 +1181,20 @@ void lyrics_renderer_mv_clear(int fadeMs)
     if (!s_mvMode) return; // background media is playing; don't clear it
     s_mvMode = false; s_mvMusicOnly = false;
     s_mediaPath.clear();
-    for(auto *inst:s_instances)
+    for(auto *inst:s_instances){
+        destroyMusicChild(inst);
         applyMediaPath(inst,QString(),fadeMs,true);
+    }
+}
+
+void lyrics_renderer_mv_music_clear()
+{
+    // Stop only the music source — leave the background picture (srcMedia) untouched.
+    QMutexLocker lk(&s_mu);
+    s_mvMode      = false;
+    s_mvMusicOnly = false;
+    for(auto *inst:s_instances)
+        destroyMusicChild(inst);
 }
 
 int lyrics_renderer_mv_get_state()
@@ -1119,6 +1202,10 @@ int lyrics_renderer_mv_get_state()
     QMutexLocker lk(&s_mu);
     if(!s_mvMode) return -1;
     for(auto *inst:s_instances){
+        // Music-only mode: state comes from the dedicated music slot
+        if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
+            return (int)obs_source_media_get_state(inst->musicSrc);
+        // Video mode: state comes from the media (picture/video) slot
         if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
             return (int)obs_source_media_get_state(inst->srcMedia);
     }
@@ -1130,6 +1217,11 @@ bool lyrics_renderer_mv_get_time(int64_t &timeMs,int64_t &durationMs)
     QMutexLocker lk(&s_mu);
     if(!s_mvMode) return false;
     for(auto *inst:s_instances){
+        if(s_mvMusicOnly && inst->musicSrc && inst->musicActive){
+            timeMs    =obs_source_media_get_time(inst->musicSrc);
+            durationMs=obs_source_media_get_duration(inst->musicSrc);
+            return true;
+        }
         if(!inst->srcMedia||!inst->mediaActive||inst->mediaIsImg) continue;
         timeMs    =obs_source_media_get_time(inst->srcMedia);
         durationMs=obs_source_media_get_duration(inst->srcMedia);
@@ -1142,18 +1234,64 @@ void lyrics_renderer_mv_set_time(int64_t timeMs)
 {
     QMutexLocker lk(&s_mu);
     if(!s_mvMode) return;
-    for(auto *inst:s_instances)
-        if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
+    for(auto *inst:s_instances){
+        if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
+            obs_source_media_set_time(inst->musicSrc,timeMs);
+        else if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
             obs_source_media_set_time(inst->srcMedia,timeMs);
+    }
 }
 
 void lyrics_renderer_mv_play_pause(bool pause)
 {
     QMutexLocker lk(&s_mu);
     if(!s_mvMode) return;
-    for(auto *inst:s_instances)
-        if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
+    for(auto *inst:s_instances){
+        if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
+            obs_source_media_play_pause(inst->musicSrc,pause);
+        else if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
             obs_source_media_play_pause(inst->srcMedia,pause);
+    }
+}
+
+// ── Music-specific query/control API ────────────────────────────────────────
+// These bypass the s_mvMode guard and operate on inst->musicSrc directly.
+
+int lyrics_renderer_music_get_state()
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances)
+        if(inst->musicSrc && inst->musicActive)
+            return (int)obs_source_media_get_state(inst->musicSrc);
+    return -1;
+}
+
+bool lyrics_renderer_music_get_time(int64_t &timeMs, int64_t &durationMs)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances){
+        if(!inst->musicSrc || !inst->musicActive) continue;
+        timeMs     = obs_source_media_get_time(inst->musicSrc);
+        durationMs = obs_source_media_get_duration(inst->musicSrc);
+        return true;
+    }
+    return false;
+}
+
+void lyrics_renderer_music_set_time(int64_t timeMs)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances)
+        if(inst->musicSrc && inst->musicActive)
+            obs_source_media_set_time(inst->musicSrc, timeMs);
+}
+
+void lyrics_renderer_music_play_pause(bool pause)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances)
+        if(inst->musicSrc && inst->musicActive)
+            obs_source_media_play_pause(inst->musicSrc, pause);
 }
 
 // ── Scripture Tab API ─────────────────────────────────────────
@@ -1162,16 +1300,18 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
 {
     QMutexLocker lk(&s_mu);
     s_scriptureMode = true;
-    s_scripTitle    = title;
+    s_scripTitle    = title; // store raw text (re-applied on settings change)
     s_scripText     = text;
     // Clear lyrics so both don't show simultaneously
     s_chineseMode=false; s_pinyin.clear(); s_english.clear();
     s_lyrics.clear(); s_section.clear(); s_title.clear();
+    // Preprocess: digits outside [...] become Unicode superscripts on text only; title is unchanged.
+    QString dispText = applySuperscript(text);
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
         clearChineseChildren(inst,s);
         updateTextChildren(inst,s,QString(),QString(),QString()); // clear lyrics
-        updateScriptureChildren(inst,s,title,text);
+        updateScriptureChildren(inst,s,title,dispText);
         obs_data_release(s);
     }
 }
@@ -1214,7 +1354,8 @@ void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
         obs_data_set_int(s,"scr_text_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
         if(s_scriptureMode)
-            updateScriptureChildren(inst,s,s_scripTitle,s_scripText);
+            updateScriptureChildren(inst,s,
+                s_scripTitle, applySuperscript(s_scripText));
         obs_data_release(s);
     }
 }

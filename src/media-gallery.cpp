@@ -169,6 +169,20 @@ MediaCard::MediaCard(const MediaItem &item, int index, QWidget *parent)
     layout->addWidget(m_nameLbl);
 
     buildThumbnail();
+
+    // Badge overlay — raised above the thumbnail so it is never obscured.
+    m_badgeLbl = new QLabel(this);
+    m_badgeLbl->setFixedSize(18, 18);
+    m_badgeLbl->setAlignment(Qt::AlignCenter);
+    m_badgeLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_badgeLbl->setStyleSheet(
+        "background:#e8a020;color:white;border-radius:9px;"
+        "font-size:9px;font-weight:bold;border:none;");
+    m_badgeLbl->hide();
+    // Position: top-right corner of the card, just inside the thumb area.
+    m_badgeLbl->move(CARD_W - 18 - 2, 3);
+    m_badgeLbl->raise();
+
     setActive(false);
 }
 
@@ -289,7 +303,24 @@ void MediaCard::contextMenuEvent(QContextMenuEvent *e)
         emit removeRequested(m_index);
 }
 
-void MediaCard::paintEvent(QPaintEvent *e){ QFrame::paintEvent(e); }
+void MediaCard::setPositionBadge(int badge)
+{
+    m_badge = badge;
+    if (!m_badgeLbl) return;
+    if (badge > 0) {
+        m_badgeLbl->setText(QString::number(badge));
+        m_badgeLbl->show();
+        m_badgeLbl->raise(); // keep above thumbnail after any repaint
+    } else {
+        m_badgeLbl->hide();
+    }
+}
+
+void MediaCard::paintEvent(QPaintEvent *e)
+{
+    QFrame::paintEvent(e);
+    // Badge is handled by m_badgeLbl overlay — no painting needed here.
+}
 
 void MediaCard::dragEnterEvent(QDragEnterEvent *e)
 { if(e->mimeData()->hasText()) e->acceptProposedAction(); }
@@ -344,6 +375,16 @@ void MediaGallery::buildUi()
     topL->setContentsMargins(6,4,6,4);
     auto *addBtn=new QPushButton("+ Add Media");
     addBtn->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
+    m_upBtn=new QToolButton;
+    m_upBtn->setText(QString::fromUtf8("\u25B2"));
+    m_upBtn->setFixedSize(24,22);
+    m_upBtn->setToolTip("Move selected media up");
+    m_upBtn->setEnabled(false);
+    m_downBtn=new QToolButton;
+    m_downBtn->setText(QString::fromUtf8("\u25BC"));
+    m_downBtn->setFixedSize(24,22);
+    m_downBtn->setToolTip("Move selected media down");
+    m_downBtn->setEnabled(false);
     m_clearBtn=new QPushButton(QString::fromUtf8("\u25A0 Stop"));
     m_clearBtn->setFixedSize(68, 22);
     m_clearBtn->setStyleSheet(
@@ -351,6 +392,8 @@ void MediaGallery::buildUi()
         "border:1px solid #8b2020;border-radius:3px;padding:0 2px;}"
         "QPushButton:hover{background:#6a2020;}");
     topL->addWidget(addBtn);
+    topL->addWidget(m_upBtn);
+    topL->addWidget(m_downBtn);
     topL->addStretch();
     topL->addWidget(m_clearBtn);
     root->addWidget(topBar);
@@ -432,6 +475,10 @@ void MediaGallery::buildUi()
             this,&MediaGallery::onClearMedia);
     connect(m_playPauseBtn,&QToolButton::clicked,
             this,&MediaGallery::onPlayPause);
+    connect(m_upBtn,   &QToolButton::clicked,
+            this,&MediaGallery::onMoveUp);
+    connect(m_downBtn, &QToolButton::clicked,
+            this,&MediaGallery::onMoveDown);
     // OBS-style seek: seek immediately on user drag; timer respects isSliderDown()
     connect(m_scrubber,&QSlider::sliderMoved,this,[this](int v){
         int64_t t=0,d=0;
@@ -482,6 +529,7 @@ void MediaGallery::rebuildGrid()
                 this,&MediaGallery::onCardClicked);
         connect(card,&MediaCard::removeRequested,
                 this,&MediaGallery::onCardRemoveRequested);
+        card->setPositionBadge(i < 6 ? i + 1 : 0);
         card->setActive(i==m_activeIndex);
         m_grid->addWidget(card,row,col);
         m_cards<<card;
@@ -494,6 +542,7 @@ void MediaGallery::setActiveCard(int index)
     m_activeIndex=index;
     for(auto *c:m_cards) c->setActive(c->index()==index);
     updateVideoControls();
+    updateUpDownButtons();
 }
 
 void MediaGallery::updateVideoControls()
@@ -623,6 +672,34 @@ QStringList MediaGallery::itemPaths() const
     QStringList out;
     for (const auto &item : m_items) out << item.path;
     return out;
+}
+
+void MediaGallery::updateUpDownButtons()
+{
+    bool sel = (m_activeIndex >= 0);
+    if (m_upBtn)   m_upBtn->setEnabled(sel && m_activeIndex > 0);
+    if (m_downBtn) m_downBtn->setEnabled(sel && m_activeIndex < m_items.size() - 1);
+}
+
+void MediaGallery::onMoveUp()
+{
+    if (m_activeIndex <= 0) return;
+    reorderCards(m_activeIndex, m_activeIndex - 1);
+    updateUpDownButtons();
+}
+
+void MediaGallery::onMoveDown()
+{
+    if (m_activeIndex < 0 || m_activeIndex >= m_items.size() - 1) return;
+    reorderCards(m_activeIndex, m_activeIndex + 1);
+    updateUpDownButtons();
+}
+
+void MediaGallery::activateByPosition(int oneBased)
+{
+    int idx = oneBased - 1;
+    if (idx < 0 || idx >= m_items.size()) return;
+    onCardClicked(idx);
 }
 
 QString MediaGallery::galleryStatePath() const

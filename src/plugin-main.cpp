@@ -13,6 +13,8 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaObject>
+#include <cstdio>
 
 OBS_DECLARE_MODULE()
 // We implement obs_module_set_locale manually below so we can use the
@@ -29,6 +31,120 @@ MODULE_EXPORT const char *obs_module_description()
 static LyricsDock      *s_dock     = nullptr;
 static WebSocketServer *s_wsServ   = nullptr;
 static QString          s_dataPath;
+
+// ── Hotkey IDs ────────────────────────────────────────────────
+static obs_hotkey_id s_hkMedia[6]  = {
+    OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID,
+    OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID,
+    OBS_INVALID_HOTKEY_ID, OBS_INVALID_HOTKEY_ID
+};
+static obs_hotkey_id s_hkNextSlide = OBS_INVALID_HOTKEY_ID;
+static obs_hotkey_id s_hkPrevSlide = OBS_INVALID_HOTKEY_ID;
+static obs_hotkey_id s_hkNextSong  = OBS_INVALID_HOTKEY_ID;
+static obs_hotkey_id s_hkPrevSong  = OBS_INVALID_HOTKEY_ID;
+
+struct MediaHkData { int pos; };
+static MediaHkData s_mediaHkData[6] = { {1},{2},{3},{4},{5},{6} };
+
+// ── Hotkey callbacks ──────────────────────────────────────────
+static void hkNextSlide(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !s_dock) return;
+    QMetaObject::invokeMethod(s_dock, "activateNextSlide", Qt::QueuedConnection);
+}
+static void hkPrevSlide(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !s_dock) return;
+    QMetaObject::invokeMethod(s_dock, "activatePrevSlide", Qt::QueuedConnection);
+}
+static void hkNextSong(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !s_dock) return;
+    QMetaObject::invokeMethod(s_dock, "activateNextSong", Qt::QueuedConnection);
+}
+static void hkPrevSong(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !s_dock) return;
+    QMetaObject::invokeMethod(s_dock, "activatePrevSong", Qt::QueuedConnection);
+}
+static void hkMedia(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+    if (!pressed || !s_dock) return;
+    int pos = static_cast<MediaHkData*>(data)->pos;
+    QMetaObject::invokeMethod(s_dock, "activateGalleryMedia",
+                              Qt::QueuedConnection, Q_ARG(int, pos));
+}
+
+// ── Hotkey save / load ────────────────────────────────────────
+static QString hotkeysFilePath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+           + "/obs-lyrics-dock/hotkeys.json";
+}
+
+static void saveHotkeyBindings()
+{
+    obs_data_t *root = obs_data_create();
+
+    auto saveOne = [&](const char *key, obs_hotkey_id id) {
+        obs_data_array_t *arr = obs_hotkey_save(id);
+        obs_data_set_array(root, key, arr);
+        obs_data_array_release(arr);
+    };
+
+    char mk[16];
+    for (int i = 0; i < 6; ++i) {
+        snprintf(mk, sizeof(mk), "media%d", i + 1);
+        saveOne(mk, s_hkMedia[i]);
+    }
+    saveOne("nextSlide", s_hkNextSlide);
+    saveOne("prevSlide", s_hkPrevSlide);
+    saveOne("nextSong",  s_hkNextSong);
+    saveOne("prevSong",  s_hkPrevSong);
+
+    const char *json = obs_data_get_json(root);
+    obs_data_release(root);
+
+    if (json) {
+        QString dir = QStandardPaths::writableLocation(
+                          QStandardPaths::AppDataLocation)
+                      + "/obs-lyrics-dock";
+        QDir().mkpath(dir);
+        QFile f(hotkeysFilePath());
+        if (f.open(QIODevice::WriteOnly))
+            f.write(QByteArray(json));
+    }
+}
+
+static void loadHotkeyBindings()
+{
+    QFile f(hotkeysFilePath());
+    if (!f.open(QIODevice::ReadOnly)) return;
+    QByteArray raw = f.readAll();
+
+    obs_data_t *root = obs_data_create_from_json(raw.constData());
+    if (!root) return;
+
+    auto loadOne = [&](const char *key, obs_hotkey_id id) {
+        obs_data_array_t *arr = obs_data_get_array(root, key);
+        if (arr) {
+            obs_hotkey_load(id, arr);
+            obs_data_array_release(arr);
+        }
+    };
+
+    char mk[16];
+    for (int i = 0; i < 6; ++i) {
+        snprintf(mk, sizeof(mk), "media%d", i + 1);
+        loadOne(mk, s_hkMedia[i]);
+    }
+    loadOne("nextSlide", s_hkNextSlide);
+    loadOne("prevSlide", s_hkPrevSlide);
+    loadOne("nextSong",  s_hkNextSong);
+    loadOne("prevSong",  s_hkPrevSong);
+
+    obs_data_release(root);
+}
 
 const QString &lyricsModuleDataPath() { return s_dataPath; }
 
@@ -51,9 +167,37 @@ static void autoStartWsServer()
         s_wsServ->start((quint16)port);
 }
 
+// Returns true if the scene (or any nested scene) contains an obs-lyrics-source.
+static bool sceneHasLyricsSource(obs_scene_t *scene)
+{
+    bool found = false;
+    obs_scene_enum_items(scene,
+        [](obs_scene_t *, obs_sceneitem_t *item, void *param) -> bool {
+            bool *found = static_cast<bool *>(param);
+            obs_source_t *src = obs_sceneitem_get_source(item);
+            if (!src) return true;
+
+            const char *id = obs_source_get_id(src);
+            if (id && strcmp(id, LYRICS_SOURCE_ID) == 0) {
+                *found = true;
+                return false; // stop enumeration
+            }
+            // Recurse into nested scenes
+            obs_scene_t *nested = obs_scene_from_source(src);
+            if (nested && sceneHasLyricsSource(nested)) {
+                *found = true;
+                return false;
+            }
+            return true;
+        },
+        &found);
+    return found;
+}
+
 static void onFrontendEvent(enum obs_frontend_event event, void *)
 {
     if (event == OBS_FRONTEND_EVENT_EXIT) {
+        saveHotkeyBindings();
         if (s_dock) {
             s_dock->saveState();
             s_dock = nullptr;
@@ -62,6 +206,18 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
         if (s_wsServ) s_wsServ->setDock(nullptr);
         SongManager::instance().save();
         if (s_wsServ) s_wsServ->stop();
+        return;
+    }
+
+    if (event == OBS_FRONTEND_EVENT_SCENE_CHANGED) {
+        if (!s_dock) return;
+        obs_source_t *sceneSrc = obs_frontend_get_current_scene();
+        if (!sceneSrc) return;
+        obs_scene_t *scene = obs_scene_from_source(sceneSrc);
+        bool hasSource = scene && sceneHasLyricsSource(scene);
+        obs_source_release(sceneSrc);
+        if (!hasSource)
+            s_dock->stopAllMedia();
     }
 }
 
@@ -141,6 +297,30 @@ MODULE_EXPORT bool obs_module_load()
     s_dock->broadcastSequence();
 
     obs_frontend_add_dock_by_id("obs-lyrics-dock", "Lyrics", s_dock);
+
+    // ── Register OBS hotkeys ──────────────────────────────────
+    {
+        char name[64], desc[64];
+        for (int i = 0; i < 6; ++i) {
+            snprintf(name, sizeof(name), "obs_lyrics_media_%d", i + 1);
+            snprintf(desc, sizeof(desc), "Lyrics: Background Media %d", i + 1);
+            s_hkMedia[i] = obs_hotkey_register_frontend(
+                name, desc, hkMedia, &s_mediaHkData[i]);
+        }
+        s_hkNextSlide = obs_hotkey_register_frontend(
+            "obs_lyrics_next_slide", "Lyrics: Next Slide",
+            hkNextSlide, nullptr);
+        s_hkPrevSlide = obs_hotkey_register_frontend(
+            "obs_lyrics_prev_slide", "Lyrics: Previous Slide",
+            hkPrevSlide, nullptr);
+        s_hkNextSong = obs_hotkey_register_frontend(
+            "obs_lyrics_next_song", "Lyrics: Next Song",
+            hkNextSong, nullptr);
+        s_hkPrevSong = obs_hotkey_register_frontend(
+            "obs_lyrics_prev_song", "Lyrics: Previous Song",
+            hkPrevSong, nullptr);
+        loadHotkeyBindings();
+    }
 
     blog(LOG_INFO, "[obs-lyrics-dock] Registered v10.0.0");
     return true;
