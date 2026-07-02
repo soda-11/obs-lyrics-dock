@@ -3,6 +3,7 @@
 #include "song-edit-dialog.hpp"
 #include "media-gallery.hpp"
 #include "scripture-tab.hpp"
+#include "call-to-worship-tab.hpp"
 #include "color-preset-button.hpp"
 #include "icon-helpers.hpp"
 
@@ -592,7 +593,8 @@ void LyricsDock::saveState()
     if (m_mediaGallery)  m_mediaGallery->saveState();
     if (m_videoTab)      m_videoTab->saveState();
     if (m_musicTab)      m_musicTab->saveState();
-    if (m_scriptureTab)  m_scriptureTab->saveState();
+    if (m_callToWorshipTab) m_callToWorshipTab->saveState();
+    if (m_scriptureTab)     m_scriptureTab->saveState();
 }
 
 void LyricsDock::loadState()
@@ -958,6 +960,9 @@ void LyricsDock::buildUi()
     lyricsPageL->addWidget(splitter);
     tabs->addTab(lyricsPage, "Lyrics");
 
+    m_callToWorshipTab = new CallToWorshipTab;
+    tabs->addTab(m_callToWorshipTab, "Call to Worship");
+
     m_scriptureTab = new ScriptureTab;
     tabs->addTab(m_scriptureTab, "Scripture");
 
@@ -1078,48 +1083,64 @@ void LyricsDock::buildUi()
     // Do NOT call lyrics_renderer_mv_clear() — music/video use the MV source and
     // should not be killed when the background layer changes.
     connect(m_mediaGallery, &MediaGallery::mediaActivated, this, [this](){
-        m_videoTab->stopPlayback();           // UI-only (no renderer call)
-        m_musicTab->clearActiveUI();          // stop slideshow, deselect picture; keep music
+        m_videoTab->stopPlayback();
+        m_musicTab->clearActiveUI();
+        m_callToWorshipTab->clearActiveCard();
         m_scriptureTab->clearActiveCard();
     });
 
     // ── Cross-tab: Video tab starts → clear lyrics, deselect galleries, stop Music UI.
     // The MV source is naturally replaced by the video push — no explicit clear needed.
     connect(m_videoTab, &VideoTab::playbackStarted, this, [this](){
-        lyrics_renderer_clear();              // hide any lyrics text on canvas
+        lyrics_renderer_clear();
         lyrics_renderer_scripture_clear();
         m_mediaGallery->clearActiveCard();
-        m_musicTab->clearActiveUI();          // stop slideshow, deselect picture; keep music UI quiet
+        m_musicTab->clearActiveUI();
+        m_callToWorshipTab->clearActiveCard();
         m_scriptureTab->clearActiveCard();
     });
 
     // ── Cross-tab: Music tab starts (music or picture) → clear lyrics, deselect galleries.
     // The MV source is naturally replaced by the music push — video stops by itself.
     connect(m_musicTab, &MusicTab::playbackStarted, this, [this](){
-        lyrics_renderer_clear();              // hide lyrics text — Music tab is a no-lyrics zone
+        lyrics_renderer_clear();
         lyrics_renderer_scripture_clear();
-        m_videoTab->stopPlayback();           // UI-only deselect
+        m_videoTab->stopPlayback();
         m_mediaGallery->clearActiveCard();
+        m_callToWorshipTab->clearActiveCard();
         m_scriptureTab->clearActiveCard();
     });
 
     // ── Cross-tab: "Stop Background Media" pressed in Lyrics tab → only stop the
     // Lyrics gallery background; do NOT touch Video/Music tabs (separate controls).
     connect(m_mediaGallery, &MediaGallery::stopAllRequested, this, [this](){
+        m_callToWorshipTab->stopPlayback();
         m_scriptureTab->stopPlayback();
+    });
+
+    // ── Cross-tab: Call to Worship gallery activates → deselect Lyrics gallery, stop Video UI
+    connect(m_callToWorshipTab, &CallToWorshipTab::playbackStarted, this, [this](){
+        m_mediaGallery->clearActiveCard();
+        m_videoTab->stopPlayback();
+        m_scriptureTab->clearActiveCard();
     });
 
     // ── Cross-tab: Scripture gallery activates → deselect Lyrics gallery, stop Video UI
     connect(m_scriptureTab, &ScriptureTab::playbackStarted, this, [this](){
         m_mediaGallery->clearActiveCard();
-        m_videoTab->stopPlayback();           // UI-only
+        m_videoTab->stopPlayback();
+        m_callToWorshipTab->clearActiveCard();
     });
 
-    // ── Combined media list broadcast (Lyrics + Scripture galleries) ──
+    // ── Combined media list broadcast (Lyrics + CTW + Scripture galleries) ──
     auto broadcastCombinedMedia = [this]() {
         if (!m_wsServer) return;
         QStringList combined;
         if (m_mediaGallery) combined << m_mediaGallery->itemPaths();
+        if (m_callToWorshipTab) {
+            auto *cg = m_callToWorshipTab->gallery();
+            if (cg) combined << cg->itemPaths();
+        }
         if (m_scriptureTab) {
             auto *sg = m_scriptureTab->gallery();
             if (sg) combined << sg->itemPaths();
@@ -1127,6 +1148,8 @@ void LyricsDock::buildUi()
         m_wsServer->broadcastMediaList(combined);
     };
     connect(m_mediaGallery, &MediaGallery::mediaListChanged,
+            this, broadcastCombinedMedia);
+    connect(m_callToWorshipTab->gallery(), &MediaGallery::mediaListChanged,
             this, broadcastCombinedMedia);
     connect(m_scriptureTab->gallery(), &MediaGallery::mediaListChanged,
             this, broadcastCombinedMedia);

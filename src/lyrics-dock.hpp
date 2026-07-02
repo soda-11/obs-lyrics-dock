@@ -7,6 +7,7 @@
 #include "ws-tab.hpp"
 #include "mv-tab.hpp"
 #include "scripture-tab.hpp"
+#include "call-to-worship-tab.hpp"
 #include "color-preset-button.hpp"
 #include <QWidget>
 #include <QTabWidget>
@@ -172,12 +173,13 @@ private:
     QToolButton    *m_cardWidthInBtn   = nullptr;
     int             m_cardWidthScale   = 30;      // 10/20/…/100 % of viewport width
 
-    MediaGallery     *m_mediaGallery   = nullptr;
-    WebSocketServer  *m_wsServer       = nullptr;
-    WsTab            *m_wsTab          = nullptr;
-    VideoTab         *m_videoTab       = nullptr;
-    MusicTab         *m_musicTab       = nullptr;
-    ScriptureTab     *m_scriptureTab   = nullptr;
+    MediaGallery       *m_mediaGallery       = nullptr;
+    WebSocketServer    *m_wsServer           = nullptr;
+    WsTab              *m_wsTab              = nullptr;
+    VideoTab           *m_videoTab           = nullptr;
+    MusicTab           *m_musicTab           = nullptr;
+    CallToWorshipTab   *m_callToWorshipTab   = nullptr;
+    ScriptureTab       *m_scriptureTab       = nullptr;
     Song   m_currentSong;
     int    m_activeSlide           = -1;
     int    m_currentSongSlideOffset = 0; // sum of slide counts of all songs before current

@@ -24,6 +24,7 @@ set(PLUGIN_SOURCES
     src/media-gallery.cpp        src/media-gallery.hpp
     src/mv-tab.cpp               src/mv-tab.hpp
     src/scripture-tab.cpp        src/scripture-tab.hpp
+    src/call-to-worship-tab.cpp  src/call-to-worship-tab.hpp
     src/color-preset-button.cpp  src/color-preset-button.hpp
     src/websocket-server.cpp     src/websocket-server.hpp
     src/settings-dialog.cpp      src/settings-dialog.hpp
