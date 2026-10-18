@@ -132,6 +132,24 @@ static QPixmap shellThumbnail(const QString &path, int w, int h)
     return result;
 }
 
+// ── Public static thumbnail generator (shared by slide cards etc.) ──
+QPixmap MediaGallery::generateThumbnail(const QString &path, int w, int h, bool crop)
+{
+    auto finalScale = [&](QPixmap px) -> QPixmap {
+        if (px.isNull()) return {};
+        if (crop)
+            return px.scaled(w, h, Qt::KeepAspectRatioByExpanding,
+                             Qt::SmoothTransformation).copy(0, 0, w, h);
+        return px.scaled(w, h, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    };
+
+    if (!isVideoFile(path))
+        return finalScale(QPixmap(path));
+
+    // Video: try Windows Shell for a real frame
+    return finalScale(shellThumbnail(path, w, h));
+}
+
 // ══════════════════════════════════════════════════════════════
 // MediaCard
 // ══════════════════════════════════════════════════════════════
@@ -140,7 +158,8 @@ MediaCard::MediaCard(const MediaItem &item, int index, QWidget *parent)
     : QFrame(parent), m_item(item), m_index(index)
 {
     setFixedSize(CARD_W, CARD_H);
-    setFrameShape(QFrame::StyledPanel);
+    setFrameShape(QFrame::NoFrame);
+    setAutoFillBackground(false);
     setAcceptDrops(true);
     setCursor(Qt::PointingHandCursor);
 
@@ -186,23 +205,41 @@ MediaCard::MediaCard(const MediaItem &item, int index, QWidget *parent)
     setActive(false);
 }
 
+void MediaCard::setCardWidth(int w)
+{
+    if (width() == w) return;
+    setFixedWidth(w);
+    int thumbW = qMax(16, w - 8);
+    m_thumb->setFixedSize(thumbW, THUMB_H);
+    if (!m_origThumb.isNull())
+        m_thumb->setPixmap(m_origThumb.scaled(thumbW, THUMB_H,
+            Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    QFontMetrics fm(m_nameLbl->font());
+    m_nameLbl->setText(fm.elidedText(
+        QFileInfo(m_item.path).fileName(), Qt::ElideMiddle, thumbW));
+    m_badgeLbl->move(w - 18 - 2, 3);
+}
+
 void MediaCard::buildThumbnail()
 {
+    auto storeAndShow = [this](const QPixmap &px){
+        m_origThumb = px;
+        m_thumb->setPixmap(px);
+    };
+
     if (!m_item.isVideo) {
         // Image: load and scale directly
         QPixmap px(m_item.path);
         if (!px.isNull()) {
-            m_thumb->setPixmap(
-                px.scaled(THUMB_W, THUMB_H,
-                          Qt::KeepAspectRatio,
-                          Qt::SmoothTransformation));
+            storeAndShow(px.scaled(THUMB_W, THUMB_H,
+                Qt::KeepAspectRatio, Qt::SmoothTransformation));
             return;
         }
     } else {
         // Video: ask Windows Shell for a real thumbnail frame
         QPixmap shellPx = shellThumbnail(m_item.path, THUMB_W, THUMB_H);
         if (!shellPx.isNull()) {
-            m_thumb->setPixmap(shellPx);
+            storeAndShow(shellPx);
             return;
         }
     }
@@ -238,26 +275,16 @@ void MediaCard::buildThumbnail()
         p.drawText(px.rect(), Qt::AlignCenter, "?");
     }
     p.end();
-    m_thumb->setPixmap(px);
+    storeAndShow(px);
 }
 
 void MediaCard::setActive(bool active)
 {
     m_active = active;
-    if (active) {
-        setStyleSheet(
-            "MediaCard{background:#1e6bb8;"
-            "border:2px solid #4da6ff;border-radius:4px;}");
-        m_nameLbl->setStyleSheet(
-            "color:#fff;font-size:8px;background:transparent;");
-    } else {
-        setStyleSheet(
-            "MediaCard{background:#2a2a2a;"
-            "border:1px solid #444;border-radius:4px;}"
-            "MediaCard:hover{border:1px solid #888;background:#333;}");
-        m_nameLbl->setStyleSheet(
-            "color:#aaa;font-size:8px;background:transparent;");
-    }
+    m_nameLbl->setStyleSheet(active
+        ? "color:#fff;font-size:8px;background:transparent;"
+        : "color:#aaa;font-size:8px;background:transparent;");
+    update(); // repaints via paintEvent — no stylesheet, no layout change
 }
 
 void MediaCard::mousePressEvent(QMouseEvent *e)
@@ -316,10 +343,36 @@ void MediaCard::setPositionBadge(int badge)
     }
 }
 
-void MediaCard::paintEvent(QPaintEvent *e)
+void MediaCard::paintEvent(QPaintEvent *)
 {
-    QFrame::paintEvent(e);
-    // Badge is handled by m_badgeLbl overlay — no painting needed here.
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    if (m_active) {
+        p.setBrush(QColor("#1e6bb8"));
+        p.setPen(QPen(QColor("#4da6ff"), 1));
+    } else if (m_hovered) {
+        p.setBrush(QColor("#333"));
+        p.setPen(QPen(QColor("#666"), 1));
+    } else {
+        p.setBrush(QColor("#2a2a2a"));
+        p.setPen(QPen(QColor("#444"), 1));
+    }
+    p.drawRoundedRect(r, 4, 4);
+}
+
+void MediaCard::enterEvent(QEnterEvent *e)
+{
+    m_hovered = true;
+    update();
+    QFrame::enterEvent(e);
+}
+
+void MediaCard::leaveEvent(QEvent *e)
+{
+    m_hovered = false;
+    update();
+    QFrame::leaveEvent(e);
 }
 
 void MediaCard::dragEnterEvent(QDragEnterEvent *e)
@@ -401,6 +454,8 @@ void MediaGallery::buildUi()
     // ── Thumbnail grid ────────────────────────────────────────
     m_scrollArea=new QScrollArea;
     m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     m_scrollArea->setStyleSheet(
         "QScrollArea{background:#181818;border:none;}");
     m_container=new QWidget;
@@ -441,26 +496,8 @@ void MediaGallery::buildUi()
     scrubRow->addWidget(m_timeLbl);
     vcL->addLayout(scrubRow);
     m_videoControls->setVisible(false);
+    m_videoControls->hide(); // seek bar not needed in media bin
     root->addWidget(m_videoControls);
-
-    // ── Fade duration bar ─────────────────────────────────────
-    auto *fadeBar=new QWidget;
-    fadeBar->setStyleSheet(
-        "background:#1e1e1e;border-top:1px solid #333;");
-    auto *fadeL=new QHBoxLayout(fadeBar);
-    fadeL->setContentsMargins(8,4,8,4);
-    auto *fadeLbl=new QLabel("Fade Duration:");
-    fadeLbl->setStyleSheet("color:#aaa;font-size:9px;");
-    m_fadeSpin=new QSpinBox;
-    m_fadeSpin->setRange(0,3000);
-    m_fadeSpin->setSingleStep(50);
-    m_fadeSpin->setValue(500);
-    m_fadeSpin->setSuffix(" ms");
-    m_fadeSpin->setFixedWidth(90);
-    fadeL->addWidget(fadeLbl);
-    fadeL->addWidget(m_fadeSpin);
-    fadeL->addStretch();
-    root->addWidget(fadeBar);
 
     // ── Poll timer ────────────────────────────────────────────
     m_pollTimer=new QTimer(this);
@@ -496,35 +533,41 @@ void MediaGallery::buildUi()
 
 int MediaGallery::fadeDurationMs() const
 {
-    return m_fadeSpin->value();
+    return m_fadeDurationMs;
+}
+
+void MediaGallery::setFadeDurationMs(int ms)
+{
+    m_fadeDurationMs = ms;
 }
 
 int MediaGallery::calcCols() const
 {
-    int available=m_container->width()-12;
-    int colWidth =MediaCard::CARD_W+6;
-    return qMax(1, available/colWidth);
+    return 2; // fixed 2-column layout; scroll vertically
 }
 
 bool MediaGallery::eventFilter(QObject *obj, QEvent *event)
 {
-    if(obj==m_container && event->type()==QEvent::Resize){
-        int nc=calcCols();
-        if(nc!=m_currentCols){
-            m_currentCols=nc;
-            rebuildGrid();
-        }
-    }
-    return QWidget::eventFilter(obj,event);
+    if (obj == m_container && event->type() == QEvent::Resize)
+        relayoutCards(); // update widths in-place, no rebuild
+    return QWidget::eventFilter(obj, event);
 }
 
 void MediaGallery::rebuildGrid()
 {
+    m_currentCols = calcCols(); // always 2
+    // Use scroll area total width (minus scrollbar reserve) to keep card
+    // width stable regardless of whether the vertical scrollbar is visible.
+    int saW = m_scrollArea->width();
+    if (saW < 40) saW = 200; // fallback during construction
+    int cardW = qMax(80, (saW - 20 - 12 - 6) / 2);
+    if (!m_cards.isEmpty() && m_cards.size() == (int)m_items.size() && abs(m_cards.first()->width() - cardW) <= 1) return;
     for(auto *c:m_cards){ m_grid->removeWidget(c); c->deleteLater(); }
     m_cards.clear();
     int col=0,row=0;
     for(int i=0;i<m_items.size();++i){
         auto *card=new MediaCard(m_items[i],i,m_container);
+        card->setCardWidth(cardW);
         connect(card,&MediaCard::clicked,
                 this,&MediaGallery::onCardClicked);
         connect(card,&MediaCard::removeRequested,
@@ -537,6 +580,22 @@ void MediaGallery::rebuildGrid()
     }
 }
 
+void MediaGallery::relayoutCards()
+{
+    if (m_relayouting || m_cards.isEmpty()) return;
+    // Use scroll area total width minus scrollbar reserve so the computed
+    // card width stays constant regardless of whether the scrollbar is shown.
+    int saW = m_scrollArea->width();
+    if (saW < 40) return;
+    int usable  = saW - 20; // 20 = scrollbar width + small buffer
+    int cardW   = qMax(80, (usable - 12 - 6) / 2); // 12=margins, 6=gap between 2 cols
+    if (abs(m_cards.first()->width() - cardW) <= 1) return; // 1px dead-zone
+    m_relayouting = true;
+    for (auto *c : m_cards)
+        c->setCardWidth(cardW);
+    m_relayouting = false;
+}
+
 void MediaGallery::setActiveCard(int index)
 {
     m_activeIndex=index;
@@ -547,14 +606,15 @@ void MediaGallery::setActiveCard(int index)
 
 void MediaGallery::updateVideoControls()
 {
+    // Seek bar hidden in media bin \u2014 play/pause state is tracked internally only.
     bool showVid=(m_activeIndex>=0 &&
                   m_activeIndex<m_items.size() &&
                   m_items[m_activeIndex].isVideo);
-    m_videoControls->setVisible(showVid);
     if(showVid){
         m_paused=false;
         m_playPauseBtn->setText(QString::fromUtf8("\u23F8"));
     }
+    m_videoControls->setVisible(false);
 }
 
 void MediaGallery::onAddMedia()
@@ -574,6 +634,7 @@ void MediaGallery::onAddMedia()
 
 void MediaGallery::onClearMedia()
 {
+    m_lastActiveIndex = -1;
     setActiveCard(-1);
     lyrics_renderer_media_clear();
     auto *srv = lyricsWsServer();
@@ -589,16 +650,27 @@ void MediaGallery::clearActiveCard()
 void MediaGallery::onCardClicked(int index)
 {
     if(index<0||index>=m_items.size()) return;
+    m_lastActiveIndex = index;
     setActiveCard(index);
     QString path = m_items[index].path;
+    if (m_items[index].isVideo) emit videoActivated(); // stop AudioBin before video starts
     lyrics_renderer_media_push(path, fadeDurationMs());
     auto *srv = lyricsWsServer();
     if (srv) srv->broadcastMediaState(path);
     emit mediaActivated(); // let LyricsDock stop MV tab
 }
 
+void MediaGallery::suspendPlayback()
+{
+    // Clears the renderer but keeps m_lastActiveIndex so replayActive() can restore.
+    lyrics_renderer_media_clear();
+    auto *srv = lyricsWsServer();
+    if (srv) srv->broadcastMediaState(QString());
+}
+
 void MediaGallery::stopPlayback()
 {
+    m_lastActiveIndex = -1;
     setActiveCard(-1);
     lyrics_renderer_media_clear();
     auto *srv = lyricsWsServer();
@@ -617,6 +689,8 @@ void MediaGallery::onCardRemoveRequested(int index)
     } else if(m_activeIndex>index){
         m_activeIndex--;
     }
+    if(m_lastActiveIndex==index)       m_lastActiveIndex=-1;
+    else if(m_lastActiveIndex>index)   m_lastActiveIndex--;
     rebuildGrid();
     saveState();
     broadcastGalleryList(m_items);
@@ -633,6 +707,11 @@ void MediaGallery::reorderCards(int from,int to)
                      m_activeIndex<=to)              m_activeIndex--;
     else if(from>to&&m_activeIndex>=to&&
                      m_activeIndex<from)             m_activeIndex++;
+    if     (m_lastActiveIndex==from)                 m_lastActiveIndex=to;
+    else if(from<to&&m_lastActiveIndex>from&&
+                     m_lastActiveIndex<=to)          m_lastActiveIndex--;
+    else if(from>to&&m_lastActiveIndex>=to&&
+                     m_lastActiveIndex<from)         m_lastActiveIndex++;
     rebuildGrid();
     saveState();
 }
@@ -674,6 +753,17 @@ QStringList MediaGallery::itemPaths() const
     return out;
 }
 
+QString MediaGallery::activeItemPath() const
+{
+    // Prefer the currently highlighted card; fall back to the last one played.
+    // This allows right-click "Apply background" to work even after the gallery
+    // card was visually deselected by a slide push (clearActiveCard).
+    int idx = (m_activeIndex >= 0) ? m_activeIndex : m_lastActiveIndex;
+    if (idx >= 0 && idx < m_items.size())
+        return m_items[idx].path;
+    return {};
+}
+
 void MediaGallery::updateUpDownButtons()
 {
     bool sel = (m_activeIndex >= 0);
@@ -702,6 +792,12 @@ void MediaGallery::activateByPosition(int oneBased)
     onCardClicked(idx);
 }
 
+void MediaGallery::replayActive()
+{
+    if (m_lastActiveIndex < 0 || m_lastActiveIndex >= m_items.size()) return;
+    lyrics_renderer_media_push(m_items[m_lastActiveIndex].path, fadeDurationMs());
+}
+
 QString MediaGallery::galleryStatePath() const
 {
     QString dir=QStandardPaths::writableLocation(
@@ -717,7 +813,6 @@ void MediaGallery::saveState()
     for(const auto &item:m_items) arr.append(item.path);
     QJsonObject obj;
     obj["items"]    = arr;
-    obj["fadeMs"]   = m_fadeSpin->value();
     QFile f(galleryStatePath());
     if(f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(obj).toJson());
@@ -737,8 +832,6 @@ void MediaGallery::loadState()
         MediaItem item; item.path=path; item.isVideo=isVideoFile(path);
         m_items<<item;
     }
-    if(obj.contains("fadeMs"))
-        m_fadeSpin->setValue(obj["fadeMs"].toInt());
     rebuildGrid();
     broadcastGalleryList(m_items);
     emit mediaListChanged();

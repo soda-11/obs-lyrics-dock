@@ -85,7 +85,7 @@ static QPixmap makeQrPixmap(const QString &text, int size)
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("Lyrics Dock Settings");
+    setWindowTitle("SSO Settings");
     setMinimumWidth(420);
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint);
     buildUi();

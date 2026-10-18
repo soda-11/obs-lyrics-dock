@@ -19,8 +19,11 @@
 #include <QJsonArray>
 #include <QNetworkInterface>
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
+#include <QUrl>
+#include <QRegularExpression>
 #include <QMetaObject>
 #include <QApplication>
 
@@ -37,6 +40,10 @@ WebSocketServer::WebSocketServer(QObject *parent)
 {
     connect(m_server, &QTcpServer::newConnection,
             this, &WebSocketServer::onNewConnection);
+
+    m_mvTimeTimer = new QTimer(this);
+    m_mvTimeTimer->setInterval(500);
+    connect(m_mvTimeTimer, &QTimer::timeout, this, &WebSocketServer::onMvTimeTick);
 }
 
 WebSocketServer::~WebSocketServer()
@@ -312,6 +319,97 @@ void WebSocketServer::handleHttpOrWs(WsClient *client,
         return;
     }
 
+    // ── Serve media thumbnails: GET /thumb?p=<url-encoded-path> ─
+    // Supports images (direct) and videos (Range requests for first-frame).
+    if (req.startsWith("GET /thumb?")) {
+        QString firstLine = req.left(req.indexOf("\r\n"));
+        int qPos  = firstLine.indexOf('?');
+        int spPos = firstLine.lastIndexOf(' ');
+        QString filePath;
+        if (qPos > 0 && spPos > qPos) {
+            for (const auto &part : firstLine.mid(qPos + 1, spPos - qPos - 1).split('&')) {
+                if (part.startsWith("p=")) {
+                    filePath = QUrl::fromPercentEncoding(part.mid(2).toUtf8());
+                    break;
+                }
+            }
+        }
+
+        static QRegularExpression kImgExt(
+            R"(\.(jpe?g|png|gif|bmp|webp|tiff?)$)",
+            QRegularExpression::CaseInsensitiveOption);
+        static QRegularExpression kVidExt(
+            R"(\.(mp4|m4v|mov|avi|mkv|webm|flv|wmv)$)",
+            QRegularExpression::CaseInsensitiveOption);
+
+        bool isImg = kImgExt.match(filePath).hasMatch();
+        bool isVid = kVidExt.match(filePath).hasMatch();
+
+        QFile f(filePath);
+        if (!filePath.isEmpty() && (isImg || isVid) && f.open(QIODevice::ReadOnly)) {
+            qint64 fileSize = f.size();
+
+            // Parse Range header (browsers send this for video preload)
+            qint64 rangeStart = 0, rangeEnd = fileSize - 1;
+            bool hasRange = false;
+            static QRegularExpression kRangeRe(
+                R"(Range:\s*bytes=(\d+)-(\d*))",
+                QRegularExpression::CaseInsensitiveOption);
+            auto rm = kRangeRe.match(req);
+            if (rm.hasMatch()) {
+                hasRange    = true;
+                rangeStart  = rm.captured(1).toLongLong();
+                QString end = rm.captured(2);
+                rangeEnd    = end.isEmpty()
+                              ? fileSize - 1
+                              : qMin(end.toLongLong(), fileSize - 1);
+            }
+            qint64 rangeLen = qMax(0LL, rangeEnd - rangeStart + 1);
+
+            f.seek(rangeStart);
+            QByteArray data = f.read(rangeLen);
+
+            // MIME type
+            QString ext = QFileInfo(filePath).suffix().toLower();
+            QByteArray mime = "application/octet-stream";
+            if      (ext=="jpg"||ext=="jpeg") mime="image/jpeg";
+            else if (ext=="png")   mime="image/png";
+            else if (ext=="gif")   mime="image/gif";
+            else if (ext=="webp")  mime="image/webp";
+            else if (ext=="bmp")   mime="image/bmp";
+            else if (ext=="mp4"||ext=="m4v") mime="video/mp4";
+            else if (ext=="mov")   mime="video/quicktime";
+            else if (ext=="avi")   mime="video/x-msvideo";
+            else if (ext=="mkv")   mime="video/x-matroska";
+            else if (ext=="webm")  mime="video/webm";
+            else if (ext=="flv")   mime="video/x-flv";
+            else if (ext=="wmv")   mime="video/x-ms-wmv";
+
+            QByteArray hdr;
+            if (hasRange) {
+                hdr = "HTTP/1.1 206 Partial Content\r\n"
+                      "Content-Range: bytes "
+                      + QByteArray::number(rangeStart) + "-"
+                      + QByteArray::number(rangeEnd) + "/"
+                      + QByteArray::number(fileSize) + "\r\n";
+            } else {
+                hdr = "HTTP/1.1 200 OK\r\n"
+                      "Cache-Control: max-age=3600\r\n";
+            }
+            hdr += "Content-Type: "   + mime + "\r\n"
+                   "Content-Length: " + QByteArray::number(data.size()) + "\r\n"
+                   "Accept-Ranges: bytes\r\n"
+                   "Connection: close\r\n\r\n";
+            client->socket->write(hdr + data);
+        } else {
+            client->socket->write(
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+        client->socket->disconnectFromHost();
+        return;
+    }
+
     // ── Serve HTML page on plain HTTP GET / ──────────────────
     if (req.startsWith("GET /")) {
         QByteArray html = serveHtmlPage();
@@ -372,7 +470,7 @@ void WebSocketServer::handleWsFrame(WsClient *client,
     // Role selection — always allowed before and after role is set
     if (type == "setRole") {
         QString role = msg["role"].toString();
-        if (role == "manager" || role == "viewer") {
+        if (role == "manager" || role == "viewer" || role == "lp") {
             client->role = role;
             blog(LOG_INFO, "[lyrics-ws] Client set role: %s",
                  role.toUtf8().constData());
@@ -389,16 +487,28 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                 sendJson(client, songMsg);
             }
 
-            // Manager-only: media list and scenes
+            // Send full service order (manager + LP)
+            if ((role == "manager" || role == "lp") && !m_lastServiceOrderJson.isEmpty()) {
+                QJsonObject soMsg;
+                soMsg["type"]  = "serviceOrder";
+                soMsg["items"] = m_lastServiceOrderJson;
+                sendJson(client, soMsg);
+            }
+
+            // Manager-only: media lists (per tab) and scenes
             if (role == "manager") {
-                if (!m_lastMediaList.isEmpty()) {
+                auto sendMediaList = [&](const QString &tab, const QStringList &list) {
                     QJsonArray arr;
-                    for (const auto &p : m_lastMediaList) arr.append(p);
-                    QJsonObject mediaMsg;
-                    mediaMsg["type"]  = "mediaList";
-                    mediaMsg["items"] = arr;
-                    sendJson(client, mediaMsg);
-                }
+                    for (const auto &p : list) arr.append(p);
+                    QJsonObject msg2;
+                    msg2["type"]  = "mediaList";
+                    msg2["tab"]   = tab;
+                    msg2["items"] = arr;
+                    sendJson(client, msg2);
+                };
+                sendMediaList("lyrics",    m_lastLyricsMediaList);
+                sendMediaList("ctw",       m_lastCtwMediaList);
+                sendMediaList("scripture", m_lastScriptureMediaList);
 
                 QJsonArray sceneArr;
                 struct obs_frontend_source_list list = {};
@@ -443,6 +553,22 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                     scrState["text"]  = m_lastScripFullText;
                     sendJson(client, scrState);
                 }
+                // CTW full state (for manager slide rebuild)
+                {
+                    QJsonObject ctwState;
+                    ctwState["type"]  = "ctwState";
+                    ctwState["title"] = m_lastCtwTitle;
+                    ctwState["text"]  = m_lastCtwText;
+                    sendJson(client, ctwState);
+                }
+                // Color presets — read live from dock so new managers see current colors
+                if (m_dock) {
+                    QJsonObject cpMsg;
+                    cpMsg["type"]    = "colorPresets";
+                    cpMsg["presets"] = m_dock->colorPresetsJson();
+                    cpMsg["active"]  = m_lastActivePreset;
+                    sendJson(client, cpMsg);
+                }
                 // MV lists — read fresh from disk so we always have the
                 // latest even if broadcastMvVideoList/MusicList was never called.
                 {
@@ -470,9 +596,67 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                     mvLists["music"]  = ma;
                     sendJson(client, mvLists);
                 }
+                // AudioBin — read fresh from audio-bin.json
+                {
+                    auto readAudioBin = []() -> QStringList {
+                        QString dir = QStandardPaths::writableLocation(
+                            QStandardPaths::AppDataLocation);
+                        QFile f(dir + "/audio-bin.json");
+                        if (!f.open(QIODevice::ReadOnly)) return {};
+                        auto doc = QJsonDocument::fromJson(f.readAll());
+                        if (doc.isNull()) return {};
+                        QStringList out;
+                        for (const auto &v : doc.object()["files"].toArray())
+                            out << v.toString();
+                        return out;
+                    };
+                    m_lastAudioBinList = readAudioBin();
+                    QJsonArray aa;
+                    for (const auto &p : m_lastAudioBinList) aa.append(p);
+                    QJsonObject abMsg;
+                    abMsg["type"]        = "audioBinList";
+                    abMsg["files"]       = aa;
+                    abMsg["activeIndex"] = m_lastAudioBinActive;
+                    abMsg["playing"]     = m_lastAudioBinPlaying;
+                    sendJson(client, abMsg);
+                }
             }
 
             emit clientCountChanged(m_clients.size());
+        }
+        return;
+    }
+
+    // LP role can send a limited set of navigation commands
+    if (client->role == "lp") {
+        LyricsDock *dock = m_dock;
+        if (type == "lpNext") {
+            QString mode = msg["mode"].toString("lyr");
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->lpNextSlide(mode); }, Qt::QueuedConnection);
+        } else if (type == "lpPrev") {
+            QString mode = msg["mode"].toString("lyr");
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->lpPrevSlide(mode); }, Qt::QueuedConnection);
+        } else if (type == "lpCTW") {
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushCTWCurrent(); }, Qt::QueuedConnection);
+        } else if (type == "lpScripture") {
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushScriptureCurrent(); }, Qt::QueuedConnection);
+        } else if (type == "presentationShow") {
+            int presType = msg["presType"].toInt(-1);
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->presentationShowFromRemote(presType); }, Qt::QueuedConnection);
+        } else if (type == "activateSlide") {
+            int serviceIdx = msg["serviceIdx"].toInt(-1);
+            int slideIdx   = msg["slideIdx"].toInt(0);
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->activateSlideFromRemote(serviceIdx, slideIdx); }, Qt::QueuedConnection);
+        } else if (type == "getSongs") {
+            // LP requests service order on connect
+            if (!m_lastSongsJson.isEmpty()) {
+                QJsonObject resp; resp["type"] = "songs"; resp["songs"] = m_lastSongsJson;
+                sendJson(client, resp);
+            }
+            if (!m_lastServiceOrderJson.isEmpty()) {
+                QJsonObject resp; resp["type"] = "serviceOrder"; resp["items"] = m_lastServiceOrderJson;
+                sendJson(client, resp);
+            }
         }
         return;
     }
@@ -506,6 +690,23 @@ void WebSocketServer::handleCommand(WsClient *client,
             resp["songs"] = m_lastSongsJson;
             sendJson(client, resp);
         }
+        // Send full service order (includes Paragraphs/Media/Presentation items)
+        if (!m_lastServiceOrderJson.isEmpty()) {
+            QJsonObject resp;
+            resp["type"]  = "serviceOrder";
+            resp["items"] = m_lastServiceOrderJson;
+            sendJson(client, resp);
+        }
+        return;
+    }
+
+    if (type == "activateSlide") {
+        int serviceIdx = msg["serviceIdx"].toInt(-1);
+        int slideIdx   = msg["slideIdx"].toInt(-1);
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=]() {
+            if (dock) dock->activateSlideFromRemote(serviceIdx, slideIdx);
+        }, Qt::QueuedConnection);
         return;
     }
 
@@ -522,6 +723,7 @@ void WebSocketServer::handleCommand(WsClient *client,
             else
                 lyrics_renderer_push(lyrics, section, title);
             if (s_server) s_server->broadcastSlide(lyrics,section,title,idx);
+            if (s_server) s_server->broadcastActiveMode("lyr");
         }, Qt::QueuedConnection);
         return;
     }
@@ -535,9 +737,11 @@ void WebSocketServer::handleCommand(WsClient *client,
     }
 
     if (type == "pushMedia") {
-        QString path   = msg["path"].toString();
-        int     fadeMs = msg["fadeMs"].toInt(500);
+        QString path      = msg["path"].toString();
+        int     fadeMs    = msg["fadeMs"].toInt(500);
+        bool    stopAudio = msg["stopAudio"].toBool(false);
         QMetaObject::invokeMethod(qApp, [=]() {
+            if (stopAudio) lyrics_renderer_audio_clear();
             lyrics_renderer_media_push(path, fadeMs);
             if (s_server) s_server->broadcastMediaState(path);
         }, Qt::QueuedConnection);
@@ -671,6 +875,162 @@ void WebSocketServer::handleCommand(WsClient *client,
     else if (type == "stopRecord")
         QMetaObject::invokeMethod(qApp,
             [](){ obs_frontend_recording_stop(); }, Qt::QueuedConnection);
+
+    // ── Presentation ─────────────────────────────────────────────
+    if (type == "presentationShow") {
+        int presType = msg["presType"].toInt(-1);
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->presentationShowFromRemote(presType); },
+            Qt::QueuedConnection);
+        return;
+    }
+
+    // ── Live-preview context-aware nav (works for lyrics/CTW/scripture/ppt) ──
+    if (type == "lpNext") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->activateNextSlide(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "lpPrev") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->activatePrevSlide(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "lpCTW") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushCTWCurrent(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "lpScripture") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushScriptureCurrent(); },
+            Qt::QueuedConnection);
+        return;
+    }
+
+    // ── PPT ──────────────────────────────────────────────────────
+    if (type == "pptNext") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pptNext(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "pptPrev") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pptPrev(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "pptGoto") {
+        int slide = msg["slide"].toInt(0);
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pptGoto(slide); },
+            Qt::QueuedConnection);
+        return;
+    }
+    if (type == "pptGetState") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pptGetState(); },
+            Qt::QueuedConnection);
+        return;
+    }
+
+    // ── Call to Worship ───────────────────────────────────────────
+    if (type == "applyCTW") {
+        QString title = msg["title"].toString();
+        QString text  = msg["text"].toString();
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){
+            if (dock) dock->applyCTWFromRemote(title, text);
+            if (s_server) s_server->broadcastCtwState(title, text);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "pushCTWSlide") {
+        QString title = msg["title"].toString();
+        QString text  = msg["text"].toString();
+        QMetaObject::invokeMethod(qApp, [=](){
+            lyrics_renderer_scripture_push(title, text);
+            if (s_server) s_server->broadcastScripture(title, text);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "clearCTW") {
+        QMetaObject::invokeMethod(qApp, [=](){
+            lyrics_renderer_scripture_clear();
+            if (s_server) s_server->broadcastScripture(QString(), QString());
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    // ── MV pause / seek controls ──────────────────────────────────
+    if (type == "mvPause") {
+        bool p = msg["pause"].toBool(true);
+        QMetaObject::invokeMethod(qApp,
+            [p](){ lyrics_renderer_mv_play_pause(p); }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "mvMusicPause") {
+        bool p = msg["pause"].toBool(true);
+        QMetaObject::invokeMethod(qApp,
+            [p](){ lyrics_renderer_music_play_pause(p); }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "mvMusicStop") {
+        QMetaObject::invokeMethod(qApp, [=](){
+            lyrics_renderer_mv_music_clear();
+            if (s_server) s_server->broadcastMvState("", "");
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "audioBinPlay") {
+        int idx = msg["index"].toInt(-1);
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){
+            if (dock) dock->audioBinPlayFromRemote(idx);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "audioBinStop") {
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){
+            if (dock) dock->audioBinStopFromRemote();
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "mvSeek") {
+        int64_t ms = (int64_t)msg["timeMs"].toDouble(0);
+        QMetaObject::invokeMethod(qApp,
+            [ms](){ lyrics_renderer_mv_set_time(ms); }, Qt::QueuedConnection);
+        return;
+    }
+    if (type == "musicSeek") {
+        int64_t ms = (int64_t)msg["timeMs"].toDouble(0);
+        QMetaObject::invokeMethod(qApp,
+            [ms](){ lyrics_renderer_music_set_time(ms); }, Qt::QueuedConnection);
+        return;
+    }
+    // ── Color preset ──────────────────────────────────────────────
+    if (type == "applyColorPreset") {
+        int idx = msg["preset"].toInt(-1);
+        LyricsDock *dock = m_dock;
+        QMetaObject::invokeMethod(qApp, [=](){
+            if (dock) dock->applyColorPresetFromRemote(idx);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    // ── OBS source volume ─────────────────────────────────────────
+    if (type == "setLyricsVolume") {
+        float vol = (float)(msg["volume"].toDouble(100.0) / 100.0);
+        QMetaObject::invokeMethod(qApp, [=](){
+            obs_source_t *src = obs_get_source_by_name(LYRICS_SOURCE_ID);
+            if (src) { obs_source_set_volume(src, vol); obs_source_release(src); }
+        }, Qt::QueuedConnection);
+        return;
+    }
 }
 
 // ── Keepalive ─────────────────────────────────────────────────
@@ -685,6 +1045,33 @@ void WebSocketServer::sendPingAll()
     for (auto *c : m_clients) {
         if (c->upgraded && c->socket && c->socket->isOpen())
             sendPing(c->socket, kPayload);
+    }
+}
+
+// ── MV time broadcast (500 ms tick) ──────────────────────────
+
+void WebSocketServer::onMvTimeTick()
+{
+    bool hasManager = false;
+    for (auto *c : m_clients)
+        if (c->authed && c->role == "manager") { hasManager = true; break; }
+    if (!hasManager) return;
+
+    int64_t tMs = 0, dMs = 0;
+    QJsonObject obj;
+    bool ok = false;
+
+    if (m_lastMvMode == "video") {
+        ok = lyrics_renderer_mv_get_time(tMs, dMs);
+        if (ok) obj["type"] = "mvTime";
+    } else if (m_lastMvMode == "music" || m_lastMvMode == "musicOnly") {
+        ok = lyrics_renderer_music_get_time(tMs, dMs);
+        if (ok) obj["type"] = "musicTime";
+    }
+    if (ok) {
+        obj["timeMs"]      = (double)tMs;
+        obj["durationMs"]  = (double)dMs;
+        broadcastJson(obj, true);
     }
 }
 
@@ -743,6 +1130,56 @@ void WebSocketServer::broadcastScriptureState(const QString &title,
     broadcastJson(obj, true); // managers only
 }
 
+void WebSocketServer::broadcastCtwState(const QString &title, const QString &text)
+{
+    m_lastCtwTitle = title;
+    m_lastCtwText  = text;
+    QJsonObject obj;
+    obj["type"]  = "ctwState";
+    obj["title"] = title;
+    obj["text"]  = text;
+    broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastColorPresets(const QJsonArray &presets, int activeIdx)
+{
+    m_lastColorPresets  = presets;
+    m_lastActivePreset  = activeIdx;
+    QJsonObject obj;
+    obj["type"]    = "colorPresets";
+    obj["presets"] = presets;
+    obj["active"]  = activeIdx;
+    broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastPptState(int current, int total, const QString &title)
+{
+    QJsonObject obj;
+    obj["type"]    = "pptState";
+    obj["current"] = current;
+    obj["total"]   = total;
+    if (!title.isEmpty()) obj["title"] = title;
+    broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastPresentationActive(int type)
+{
+    static const char *kNames[] = { "PowerPoint", "Google Slides", "Canva" };
+    QJsonObject obj;
+    obj["type"]     = "presentationActive";
+    obj["presType"] = type;
+    obj["presName"] = (type >= 0 && type <= 2) ? kNames[type] : "";
+    broadcastJson(obj); // all roles — LP needs this to update pres button state
+}
+
+void WebSocketServer::broadcastActiveMode(const QString &mode)
+{
+    QJsonObject obj;
+    obj["type"] = "lpActiveMode";
+    obj["mode"] = mode;
+    broadcastJson(obj);
+}
+
 void WebSocketServer::broadcastScene(const QString &sceneName)
 {
     m_lastScene = sceneName;
@@ -770,13 +1207,27 @@ void WebSocketServer::broadcastSongs(const QJsonArray &songs)
     broadcastJson(obj); // send to all roles (viewer needs for score mode)
 }
 
-void WebSocketServer::broadcastMediaList(const QStringList &paths)
+void WebSocketServer::broadcastServiceOrder(const QJsonArray &order)
 {
-    m_lastMediaList = paths;
+    m_lastServiceOrderJson = order;
+    QJsonObject obj;
+    obj["type"]  = "serviceOrder";
+    obj["items"] = order;
+    broadcastJson(obj, true); // managers only
+}
+
+void WebSocketServer::broadcastMediaList(const QString &tab, const QStringList &paths)
+{
+    // Cache per-tab
+    if      (tab == "ctw")       m_lastCtwMediaList       = paths;
+    else if (tab == "scripture") m_lastScriptureMediaList = paths;
+    else                         m_lastLyricsMediaList    = paths;
+
     QJsonArray arr;
     for (const auto &p : paths) arr.append(p);
     QJsonObject obj;
     obj["type"]  = "mediaList";
+    obj["tab"]   = tab;
     obj["items"] = arr;
     broadcastJson(obj, true); // managers only
 }
@@ -790,6 +1241,8 @@ void WebSocketServer::broadcastMvState(const QString &mode, const QString &path)
     obj["mode"] = mode;
     obj["path"] = path;
     broadcastJson(obj, true); // managers only
+    if (!mode.isEmpty()) m_mvTimeTimer->start();
+    else                 m_mvTimeTimer->stop();
 }
 
 void WebSocketServer::broadcastMvVideoList(const QStringList &paths)
@@ -811,6 +1264,28 @@ void WebSocketServer::broadcastMvMusicList(const QStringList &paths)
     QJsonObject obj;
     obj["type"]  = "mvMusicList";
     obj["music"] = arr;
+    broadcastJson(obj, true);
+}
+
+void WebSocketServer::broadcastAudioBinList(const QStringList &paths)
+{
+    m_lastAudioBinList = paths;
+    QJsonArray arr;
+    for (const auto &p : paths) arr.append(p);
+    QJsonObject obj;
+    obj["type"]  = "audioBinList";
+    obj["files"] = arr;
+    broadcastJson(obj, true);
+}
+
+void WebSocketServer::broadcastAudioBinState(int activeIndex, bool playing)
+{
+    m_lastAudioBinActive  = activeIndex;
+    m_lastAudioBinPlaying = playing;
+    QJsonObject obj;
+    obj["type"]        = "audioBinState";
+    obj["activeIndex"] = activeIndex;
+    obj["playing"]     = playing;
     broadcastJson(obj, true);
 }
 
@@ -857,10 +1332,12 @@ void WebSocketServer::sendFrame(QTcpSocket *sock, const QByteArray &payload)
         frame.append((char)((len >> 8) & 0xFF));
         frame.append((char)(len & 0xFF));
     } else {
-        // Large frame: 8-byte extended length
+        // Large frame: 8-byte extended length — must use uint64_t; shifting
+        // a 32-bit int by ≥32 bits is UB and wraps mod-32 on x64 MSVC.
         frame.append((char)127);
+        uint64_t ulen = (uint64_t)len;
         for (int i = 7; i >= 0; --i)
-            frame.append((char)((len >> (i*8)) & 0xFF));
+            frame.append((char)((ulen >> (i*8)) & 0xFF));
     }
     frame.append(payload);
     sock->write(frame);
@@ -894,6 +1371,31 @@ void WebSocketServer::broadcastJson(const QJsonObject &obj,
         if (c->role.isEmpty())   continue; // role not yet chosen
         if (managersOnly && c->role != "manager") continue;
         sendJson(c, obj);
+    }
+}
+
+void WebSocketServer::broadcastPreview(const QByteArray &jpegData)
+{
+    // Skip expensive base64 encode if nobody is listening
+    bool hasClients = false;
+    for (auto *c : m_clients)
+        if (c->upgraded && c->authed && !c->role.isEmpty()) { hasClients = true; break; }
+    if (!hasClients) return;
+
+    // Send as JSON text: {"type":"preview","data":"data:image/jpeg;base64,..."}
+    QByteArray b64 = "data:image/jpeg;base64,";
+    b64 += jpegData.toBase64();
+
+    // Build frame manually to avoid QJsonDocument overhead on large strings
+    QByteArray payload = "{\"type\":\"preview\",\"data\":\"";
+    payload += b64;
+    payload += "\"}";
+
+    for (auto *c : m_clients) {
+        if (!c->upgraded)      continue;
+        if (!c->authed)        continue;
+        if (c->role.isEmpty()) continue;
+        sendFrame(c->socket, payload);
     }
 }
 
@@ -966,7 +1468,7 @@ QByteArray WebSocketServer::serveHtmlPage() const
         "font-family:sans-serif;display:flex;align-items:center;"
         "justify-content:center;height:100vh;margin:0;"
         "flex-direction:column;'>"
-        "<h2>OBS Lyrics Remote</h2>"
+        "<h2>SSO Remote</h2>"
         "<p>remote.html not found.</p>"
         "<p style='font-size:12px;color:#888'>Expected: "
         + dataPath.toUtf8() + "</p></body></html>");

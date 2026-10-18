@@ -124,8 +124,9 @@ QJsonObject LyricsSection::toJson() const
     o["isChinese"]       = isChinese;
     o["showPinyin"]      = showPinyin;
     o["showTranslation"] = showTranslation;
-    if (!pinyin.isEmpty())  o["pinyin"]  = pinyin;
-    if (!english.isEmpty()) o["english"] = english;
+    if (!pinyin.isEmpty())         o["pinyin"]         = pinyin;
+    if (!english.isEmpty())        o["english"]        = english;
+    if (!backgroundPath.isEmpty()) o["backgroundPath"] = backgroundPath;
     return o;
 }
 
@@ -140,6 +141,7 @@ LyricsSection LyricsSection::fromJson(const QJsonObject &o)
     s.showTranslation = o["showTranslation"].toBool(false);
     s.pinyin          = o["pinyin"].toString();
     s.english         = o["english"].toString();
+    s.backgroundPath  = o["backgroundPath"].toString();
     return s;
 }
 
@@ -147,15 +149,21 @@ QList<LyricsSlide> Song::allSlides() const
 {
     QList<LyricsSlide> result;
     for (const auto &sec : sections) {
+        // Effective background: section override first, then song default
+        QString effectiveBg = sec.backgroundPath.isEmpty() ? backgroundPath : sec.backgroundPath;
         if (sec.isChinese) {
-            result << sec.chineseSlides();
+            QList<LyricsSlide> slides = sec.chineseSlides();
+            for (auto &sl : slides)
+                sl.backgroundPath = effectiveBg;
+            result << slides;
         } else {
             QString lbl = sec.label.isEmpty()
                           ? sectionTypeLabel(sec.type) : sec.label;
             for (const auto &slideText : sec.slides()) {
                 LyricsSlide sl;
-                sl.section = lbl;
-                sl.text    = slideText;
+                sl.section        = lbl;
+                sl.text           = slideText;
+                sl.backgroundPath = effectiveBg;
                 result << sl;
             }
         }
@@ -172,6 +180,7 @@ QJsonObject Song::toJson() const
     o["key"]       = key;
     o["tempo"]     = tempo;
     o["copyright"] = copyright;
+    if (!backgroundPath.isEmpty()) o["backgroundPath"] = backgroundPath;
     QJsonArray arr;
     for (const auto &s : sections) arr.append(s.toJson());
     o["sections"]  = arr;
@@ -181,12 +190,13 @@ QJsonObject Song::toJson() const
 Song Song::fromJson(const QJsonObject &o)
 {
     Song s;
-    s.id        = o["id"].toString();
-    s.title     = o["title"].toString();
-    s.artist    = o["artist"].toString();
-    s.key       = o["key"].toString();
-    s.tempo     = o["tempo"].toString();
-    s.copyright = o["copyright"].toString();
+    s.id             = o["id"].toString();
+    s.title          = o["title"].toString();
+    s.artist         = o["artist"].toString();
+    s.key            = o["key"].toString();
+    s.tempo          = o["tempo"].toString();
+    s.copyright      = o["copyright"].toString();
+    s.backgroundPath = o["backgroundPath"].toString();
     for (const auto &v : o["sections"].toArray())
         s.sections << LyricsSection::fromJson(v.toObject());
     return s;

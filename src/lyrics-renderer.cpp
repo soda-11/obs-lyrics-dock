@@ -33,6 +33,7 @@ static QString s_lyrics;
 static QString s_section;
 static QString s_title;
 static QString s_mediaPath;
+static QString s_audioPath;  // AudioBin dedicated audio slot
 
 // MV mode: set when MV tab owns the media source.
 static bool    s_mvMode      = false;
@@ -41,6 +42,11 @@ static bool    s_mvMode      = false;
 // source so album-art frames never appear on the OBS canvas.
 static bool    s_mvMusicOnly = false;
 
+// Debug: split the 4 BG slots into separate 854×480 quadrants on the OBS canvas
+// so their layering and fade states are directly visible.  Never affects the
+// dock's own col-2 preview.  Toggle via lyrics_renderer_set_bg_debug().
+static bool    s_bgDebugLayout = false;
+
 // Chinese mode: set when a Chinese (trilingual) slide is active.
 // In this mode srcLyrics carries Chinese characters, srcPinyin carries
 // pinyin (top), and srcEnglish carries the English translation (bottom).
@@ -48,9 +54,10 @@ static bool    s_chineseMode = false;
 static QString s_pinyin;    // cached pinyin for re-apply on settings change
 static QString s_english;   // cached English translation
 
-// Scripture mode: set when Scripture tab is displaying content.
-// Lyrics and scripture text boxes are mutually cleared on push.
+// Scripture/CTW mode: set when either tab is displaying content.
+// s_ctwMode=true means CTW is active (uses ctw_ prefixes instead of scr_).
 static bool    s_scriptureMode = false;
+static bool    s_ctwMode       = false;
 static QString s_scripTitle;
 static QString s_scripText;
 
@@ -82,12 +89,12 @@ static QString s_qrPath;
 static constexpr int MAX_CH_STRIPS = 5;
 
 // ── File-type helpers ─────────────────────────────────────────
-static const QSet<QString> s_imageExts = {
-    "jpg","jpeg","png","gif","bmp","webp","tga","tiff"
+static const QSet<QString> s_videoExts = {
+    "mp4","mov","avi","mkv","webm","flv","wmv","m4v","ts","mts","m2ts"
 };
-static bool isImageFile(const QString &p)
+static bool isVideoFile(const QString &p)
 {
-    return s_imageExts.contains(QFileInfo(p).suffix().toLower());
+    return s_videoExts.contains(QFileInfo(p).suffix().toLower());
 }
 
 // ── Scripture text preprocessor ──────────────────────────────────────────────
@@ -119,23 +126,45 @@ static QString applySuperscript(const QString &raw)
     return out;
 }
 
+// ── Background layer state machine ──────────────────────────
+// 4 slots:  index 0/1 = image layers 1/2 (bottom),  2/3 = video layers 3/4 (top).
+// Layer 4 (index 3) always fades in and always fades out.
+// Layers 1-3 appear/disappear instantly; only layer 4 uses FADING_IN/FADING_OUT.
+// Layer 3 (index 2) fades out only when going to image layers or clear.
+enum class BgState { INACTIVE, WAITING, ACTIVE, FADING_IN, FADING_OUT };
+
+struct BgSlot {
+    obs_source_t *src          = nullptr;
+    bool          isVideo      = false;
+    bool          isMvSlot     = false;  // true = MV tab video; gets audio callback
+    bool          looping      = true;
+    QString       path;
+    BgState       state        = BgState::INACTIVE;
+    uint64_t      stateStartNs = 0;      // start time for WAITING timeout or fade alpha
+    uint32_t      fadeDurMs    = 500;
+    // Actions on WAITING complete:
+    bool     waitGoFadeIn        = false; // false→ACTIVE instantly, true→FADING_IN
+    int      triggerFadeOut      = -1;   // slot index to set FADING_OUT when WAITING→ACTIVE
+    uint32_t triggerFadeOutDurMs = 500;
+    // Action on FADING_IN complete:
+    uint8_t  clearOnFadeIn       = 0;   // bitmask: slots to destroyBgSlot when FADING_IN→ACTIVE
+};
+
 // ── Per-instance ──────────────────────────────────────────────
 struct LyricsInstance {
     obs_source_t *self          = nullptr;
 
-    // Current active media child (image_source or ffmpeg_source for background pictures/videos)
-    obs_source_t *srcMedia      = nullptr;
-    bool          mediaIsImg    = false;
-    bool          mediaActive   = false;
+    // Background layers: [0]=layer1 (image bottom) … [3]=layer4 (video top)
+    BgSlot          bgSlots[4];
+    gs_texrender_t *bgTexRender  = nullptr;  // shared texrender for alpha fades
+    gs_effect_t    *bgFadeEffect = nullptr;  // lazily compiled opacity shader
 
-    // Separate slot for music (VLC or ffmpeg audio source).
-    // Kept completely independent from srcMedia so that showing/changing a
-    // background picture never destroys the music source.
+    // Dedicated music slot (VLC or ffmpeg audio; independent of bgSlots)
     obs_source_t *musicSrc      = nullptr;
     bool          musicActive   = false;
 
-    // OBS built-in fade_transition source — handles crossfade between media
-    obs_source_t *transitionSrc = nullptr;
+    // Dedicated AudioBin slot — audio-only ffmpeg_source, independent of bgSlots/musicSrc
+    obs_source_t *audioSrc      = nullptr;
 
     // Lyrics text children (English mode)
     obs_source_t *srcLyrics  = nullptr;
@@ -163,6 +192,8 @@ struct LyricsInstance {
     int bottomBarH   = DEF_BOTTOM_BAR_H;
     int scripTitleH  = DEF_SCRIP_TITLE_H;
     int scripHMargin = DEF_SCRIP_H_MARGIN;
+    int ctwTitleH    = DEF_SCRIP_TITLE_H;
+    int ctwHMargin   = DEF_SCRIP_H_MARGIN;
 
     // Chinese mode layout
     int chPinyinY         = DEF_CH_PINYIN_Y;
@@ -264,15 +295,20 @@ static void updateTextChildren(LyricsInstance *inst, obs_data_t *s,
     pushTextChild(inst->srcTitle,  s,"title_",  title,  halfW,        barH);
 }
 
+// isCTW=true → use ctw_title_/ctw_text_ prefixes and CTW layout values.
+// isCTW=false (default) → use scr_title_/scr_text_ and Scripture layout values.
 static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
-                                    const QString &title, const QString &text)
+                                    const QString &title, const QString &text,
+                                    bool isCTW = false)
 {
-    // Text boxes are inset by scripHMargin px on each side horizontally.
-    int textW = qMax(64, inst->canvasW - 2 * inst->scripHMargin);
-    pushTextChild(inst->srcScripTitle, s, "scr_title_", title,
-                  textW, inst->scripTitleH);
-    pushTextChild(inst->srcScripText,  s, "scr_text_",  text,
-                  textW, inst->canvasH - inst->scripTitleH);
+    const char *titlePfx = isCTW ? "ctw_title_" : "scr_title_";
+    const char *textPfx  = isCTW ? "ctw_text_"  : "scr_text_";
+    int titleH  = isCTW ? inst->ctwTitleH  : inst->scripTitleH;
+    int hMargin = isCTW ? inst->ctwHMargin : inst->scripHMargin;
+    int textW   = qMax(64, inst->canvasW - 2 * hMargin);
+    pushTextChild(inst->srcScripTitle, s, titlePfx, title, textW, titleH);
+    pushTextChild(inst->srcScripText,  s, textPfx,  text,  textW,
+                  inst->canvasH - titleH);
 }
 
 // ── Chinese slide child push ──────────────────────────────────────────────────
@@ -351,22 +387,75 @@ static void mediaAudioCb(void *param, obs_source_t *,
     obs_source_output_audio(inst->self,&out);
 }
 
-// ── Media child management ────────────────────────────────────
+// ── Background slot management ────────────────────────────────
 
-static void destroyMediaChild(LyricsInstance *inst)
+static void destroyBgSlot(LyricsInstance *inst, int i)
 {
-    if (!inst->srcMedia) return;
-    if (!inst->mediaIsImg)
-        obs_source_remove_audio_capture_callback(
-            inst->srcMedia, mediaAudioCb, inst);
-    obs_source_dec_active(inst->srcMedia);
-    obs_source_remove_active_child(inst->self, inst->srcMedia);
-    obs_source_release(inst->srcMedia);
-    inst->srcMedia    = nullptr;
-    inst->mediaActive = false;
+    auto &sl = inst->bgSlots[i];
+    if (!sl.src) return;
+    if (sl.isVideo)
+        obs_source_remove_audio_capture_callback(sl.src, mediaAudioCb, inst);
+    obs_source_dec_active(sl.src);
+    obs_source_remove_active_child(inst->self, sl.src);
+    obs_source_release(sl.src);
+    sl = BgSlot{};
 }
 
-// Tears down the dedicated music child source (separate from srcMedia).
+static void startBgFadeOut(LyricsInstance *inst, int i, uint32_t durMs)
+{
+    auto &sl = inst->bgSlots[i];
+    if (sl.state == BgState::INACTIVE) return;
+    sl.fadeDurMs    = durMs;
+    sl.state        = BgState::FADING_OUT;
+    sl.stateStartNs = os_gettime_ns();
+}
+
+// Creates a source into slot i. startWaiting=true → WAITING state (ready poll);
+// false → ACTIVE immediately (instant appear, no wait).
+static void loadBgSlot(LyricsInstance *inst, int i, const QString &path,
+                       uint32_t fadeDurMs, bool looping, bool isMvSlot, bool startWaiting)
+{
+    destroyBgSlot(inst, i);
+    auto &sl = inst->bgSlots[i];
+
+    bool vid = isVideoFile(path);
+    obs_data_t *d = obs_data_create();
+    sl.src = obs_source_create_private(
+        vid ? "ffmpeg_source" : "image_source", "lyrics_bg", d);
+    obs_data_release(d);
+    if (!sl.src) return;
+
+    obs_source_add_active_child(inst->self, sl.src);
+    obs_source_inc_active(sl.src);
+    if (vid)
+        obs_source_add_audio_capture_callback(sl.src, mediaAudioCb, inst);
+
+    obs_data_t *cfg = obs_data_create();
+    if (!vid) {
+        obs_data_set_string(cfg, "file",   path.toUtf8().constData());
+        obs_data_set_bool  (cfg, "unload", false);
+    } else {
+        obs_data_set_string(cfg, "local_file",           path.toUtf8().constData());
+        obs_data_set_bool  (cfg, "is_local_file",        true);
+        obs_data_set_bool  (cfg, "looping",              looping);
+        obs_data_set_bool  (cfg, "hw_decode",            true);
+        obs_data_set_bool  (cfg, "restart_on_activate",  false);
+        obs_data_set_int   (cfg, "buffering_mb",         2);
+    }
+    obs_source_update(sl.src, cfg);
+    obs_data_release(cfg);
+
+    sl.isVideo      = vid;
+    sl.isMvSlot     = isMvSlot;
+    sl.looping      = looping;
+    sl.path         = path;
+    sl.fadeDurMs    = fadeDurMs;
+    sl.state        = startWaiting ? BgState::WAITING : BgState::ACTIVE;
+    sl.stateStartNs = os_gettime_ns();
+    // Caller sets waitGoFadeIn, triggerFadeOut, clearOnFadeIn as needed
+}
+
+// Tears down the dedicated music child source (independent of bgSlots).
 static void destroyMusicChild(LyricsInstance *inst)
 {
     if (!inst->musicSrc) return;
@@ -378,78 +467,153 @@ static void destroyMusicChild(LyricsInstance *inst)
     inst->musicActive = false;
 }
 
-// Creates a new media child, activates it, and starts the OBS
-// fade_transition. fadeMs=0 = instant cut. looping=false for MV sources.
-static void applyMediaPath(LyricsInstance *inst,
-                            const QString &path, int fadeMs,
-                            bool looping = true)
+// ── AudioBin dedicated audio slot ────────────────────────────
+static void destroyAudioSlot(LyricsInstance *inst)
 {
+    if (!inst->audioSrc) return;
+    // Blank the file path first so ffmpeg_source stops decoding immediately
+    obs_data_t *blank = obs_data_create();
+    obs_data_set_string(blank, "local_file", "");
+    obs_data_set_bool  (blank, "is_local_file", true);
+    obs_source_update(inst->audioSrc, blank);
+    obs_data_release(blank);
+    obs_source_media_stop(inst->audioSrc);
+    obs_source_remove_audio_capture_callback(inst->audioSrc, mediaAudioCb, inst);
+    obs_source_dec_active(inst->audioSrc);
+    obs_source_remove_active_child(inst->self, inst->audioSrc);
+    obs_source_release(inst->audioSrc);
+    inst->audioSrc = nullptr;
+}
+
+static void loadAudioSlot(LyricsInstance *inst, const QString &path)
+{
+    destroyAudioSlot(inst);
+    obs_data_t *d = obs_data_create();
+    inst->audioSrc = obs_source_create_private("ffmpeg_source", "lyrics_audio_bin", d);
+    obs_data_release(d);
+    if (!inst->audioSrc) return;
+    obs_source_add_active_child(inst->self, inst->audioSrc);
+    obs_source_inc_active(inst->audioSrc);
+    obs_source_add_audio_capture_callback(inst->audioSrc, mediaAudioCb, inst);
+    obs_data_t *cfg = obs_data_create();
+    obs_data_set_string(cfg, "local_file", path.toUtf8().constData());
+    obs_data_set_bool(cfg, "is_local_file", true);
+    obs_data_set_bool(cfg, "looping", false);
+    obs_data_set_bool(cfg, "hw_decode", false);
+    obs_data_set_bool(cfg, "restart_on_activate", false);
+    obs_source_update(inst->audioSrc, cfg);
+    obs_data_release(cfg);
+}
+
+// ── 4-layer background transition ─────────────────────────────
+// Indices 0/1 = image layers 1/2 (pictures & presentations).
+// Indices 2/3 = video layers 3/4.
+// Layer 4 (index 3) always fades in and always fades out.
+// Layer 3 (index 2) fades out only when switching to image layers or clearing.
+// Layers 0-2 appear/disappear instantly when loaded/removed.
+static constexpr uint32_t BG_READY_TIMEOUT_MS = 300;
+
+static void applyBgPath(LyricsInstance *inst, const QString &path,
+                        int fadeMs, bool looping = true, bool isMvSlot = false)
+{
+    const uint32_t fdMs = (fadeMs > 0) ? (uint32_t)fadeMs : 0u;
+
+    // ── Empty path: clear all slots ──────────────────────────
     if (path.isEmpty()) {
-        if (inst->transitionSrc)
-            obs_transition_start(inst->transitionSrc,
-                OBS_TRANSITION_MODE_AUTO,
-                (uint32_t)(fadeMs > 0 ? fadeMs : 0), nullptr);
-        destroyMediaChild(inst);
+        // Videos fade out (if fadeMs > 0); images disappear instantly.
+        for (int i = 2; i <= 3; i++) {
+            if (inst->bgSlots[i].state != BgState::INACTIVE) {
+                if (fdMs > 0) startBgFadeOut(inst, i, fdMs);
+                else          destroyBgSlot(inst, i);
+            }
+        }
+        for (int i = 0; i <= 1; i++) destroyBgSlot(inst, i);
         return;
     }
 
-    bool needImg    = isImageFile(path);
-    const char *type= needImg ? "image_source" : "ffmpeg_source";
+    bool vid = isVideoFile(path);
 
-    // Create new child source
-    obs_data_t *d  = obs_data_create();
-    auto *newChild = obs_source_create_private(type,
-                         "lyrics_media_child", d);
-    obs_data_release(d);
-    if (!newChild) return;
+    // ── Same path → do nothing ────────────────────────────────
+    for (int i = 0; i < 4; i++) {
+        auto &sl = inst->bgSlots[i];
+        if (sl.path == path &&
+            sl.state != BgState::INACTIVE && sl.state != BgState::FADING_OUT)
+            return;
+    }
 
-    // Activate new child so OBS starts the decode pipeline
-    obs_source_add_active_child(inst->self, newChild);
-    obs_source_inc_active(newChild);
-    if (!needImg)
-        obs_source_add_audio_capture_callback(
-            newChild, mediaAudioCb, inst);
+    // ── Find current primary slots ────────────────────────────
+    // ACTIVE, WAITING, or FADING_IN qualifies; FADING_OUT does not.
+    int activeVid = -1;
+    for (int i = 3; i >= 2; i--) {
+        BgState st = inst->bgSlots[i].state;
+        if (st == BgState::ACTIVE || st == BgState::WAITING || st == BgState::FADING_IN)
+        { activeVid = i; break; }
+    }
+    int activeImg = -1;
+    for (int i = 1; i >= 0; i--) {
+        BgState st = inst->bgSlots[i].state;
+        if (st == BgState::ACTIVE || st == BgState::WAITING || st == BgState::FADING_IN)
+        { activeImg = i; break; }
+    }
 
-    // Configure file path
-    obs_data_t *cfg = obs_data_create();
-    if (needImg) {
-        obs_data_set_string(cfg, "file", path.toUtf8().constData());
-        obs_data_set_bool  (cfg, "unload", false);
+    if (vid) {
+        // ── Video transitions ─────────────────────────────────
+        if (activeVid >= 0) {
+            if (activeVid == 3) {
+                // Video at slot 3 (top) → new Video:
+                // New video appears instantly at slot 2. Old fades out at slot 3, revealing new below.
+                destroyBgSlot(inst, 2);
+                loadBgSlot(inst, 2, path, fdMs, looping, isMvSlot, false); // ACTIVE — no fade in
+                startBgFadeOut(inst, 3, fdMs);
+            } else {
+                // Video at slot 2 (below) → new Video:
+                // New video fades in at slot 3 (on top of slot 2). Slot 2 unloads instantly when done.
+                destroyBgSlot(inst, 3);
+                loadBgSlot(inst, 3, path, fdMs, looping, isMvSlot, true); // WAITING → FADING_IN
+                inst->bgSlots[3].waitGoFadeIn  = true;
+                inst->bgSlots[3].clearOnFadeIn = (1u << 2); // unload slot 2 when fade-in completes
+            }
+        } else {
+            // No video (or only pictures) → Video: new video FADES IN at slot 3 (top).
+            // Any pictures at slots 0/1 show through during fade; cleared when done.
+            destroyBgSlot(inst, 2);
+            destroyBgSlot(inst, 3);
+            loadBgSlot(inst, 3, path, fdMs, looping, isMvSlot, false);
+            inst->bgSlots[3].state        = BgState::FADING_IN;
+            inst->bgSlots[3].stateStartNs = os_gettime_ns();
+            uint8_t mask = 0;
+            for (int i = 0; i <= 1; i++)
+                if (inst->bgSlots[i].state != BgState::INACTIVE)
+                    mask |= (1u << i);
+            inst->bgSlots[3].clearOnFadeIn = mask;
+        }
     } else {
-        obs_data_set_string(cfg, "local_file", path.toUtf8().constData());
-        obs_data_set_bool  (cfg, "is_local_file",       true);
-        obs_data_set_bool  (cfg, "looping",             looping);
-        obs_data_set_bool  (cfg, "hw_decode",           true);
-        obs_data_set_bool  (cfg, "restart_on_activate", false);
-        obs_data_set_int   (cfg, "buffering_mb",        2);
+        // ── Picture / presentation transitions ────────────────
+        if (activeVid >= 0) {
+            // Rule 6: video active → picture → load at layer 2 (index 1).
+            // Keep WAITING for images — we want the picture ready before fading video.
+            destroyBgSlot(inst, 1);
+            loadBgSlot(inst, 1, path, fdMs, false, isMvSlot, true);
+            inst->bgSlots[1].waitGoFadeIn        = false;
+            inst->bgSlots[1].triggerFadeOut      = activeVid;
+            inst->bgSlots[1].triggerFadeOutDurMs = fdMs;
+            // Clear any other non-primary video slot immediately
+            for (int i = 2; i <= 3; i++)
+                if (i != activeVid && inst->bgSlots[i].state != BgState::INACTIVE)
+                    destroyBgSlot(inst, i);
+        } else if (activeImg == 1) {
+            // Rule 7: picture at layer 2 → new picture → load at layer 1; layer 2 gone.
+            loadBgSlot(inst, 0, path, 0, false, isMvSlot, false);
+            destroyBgSlot(inst, 1);
+        } else if (activeImg == 0) {
+            // Rule 8: picture at layer 1 → new picture → load at layer 2; layer 1 gone.
+            loadBgSlot(inst, 1, path, 0, false, isMvSlot, false);
+            destroyBgSlot(inst, 0);
+        } else {
+            // Rule 2: nothing → picture → instant appear at layer 2.
+            loadBgSlot(inst, 1, path, 0, false, isMvSlot, false);
+        }
     }
-    obs_source_update(newChild, cfg);
-    obs_data_release(cfg);
-
-    // Remove old child audio callback before transition replaces it
-    if (inst->srcMedia && !inst->mediaIsImg)
-        obs_source_remove_audio_capture_callback(
-            inst->srcMedia, mediaAudioCb, inst);
-
-    // Start OBS fade transition to the new child — OBS handles blending
-    if (inst->transitionSrc) {
-        obs_transition_set_size(inst->transitionSrc,
-            (uint32_t)inst->canvasW, (uint32_t)inst->canvasH);
-        obs_transition_start(inst->transitionSrc,
-            OBS_TRANSITION_MODE_AUTO,
-            (uint32_t)(fadeMs > 0 ? fadeMs : 0),
-            newChild);
-    }
-
-    // Release old child (transition holds a ref until done)
-    if (inst->srcMedia) {
-        obs_source_dec_active(inst->srcMedia);
-        obs_source_remove_active_child(inst->self, inst->srcMedia);
-        obs_source_release(inst->srcMedia);
-    }
-    inst->srcMedia    = newChild;
-    inst->mediaIsImg  = needImg;
-    inst->mediaActive = true;
 }
 
 static const char *src_name(void*){ return "Lyrics"; }
@@ -480,6 +644,10 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->chEnglishY        = readOrDef("ch_english_y",         DEF_CH_ENGLISH_Y);
     if (!obs_data_has_user_value(settings, "scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
+    inst->ctwTitleH  = obs_data_has_user_value(settings,"ctw_title_h")
+                       ? (int)obs_data_get_int(settings,"ctw_title_h") : DEF_SCRIP_TITLE_H;
+    inst->ctwHMargin = obs_data_has_user_value(settings,"ctw_h_margin")
+                       ? (int)obs_data_get_int(settings,"ctw_h_margin") : DEF_SCRIP_H_MARGIN;
 
     auto makeGdi=[](const char *name)->obs_source_t*{
         obs_data_t *d=obs_data_create();
@@ -508,27 +676,13 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
         obs_data_release(qd);
     }
 
-    // Create OBS built-in fade transition source for media crossfade
-    {
-        obs_data_t *td = obs_data_create();
-        inst->transitionSrc = obs_source_create_private(
-            "fade_transition", "lyrics_media_fade", td);
-        obs_data_release(td);
-        if (inst->transitionSrc) {
-            obs_source_add_active_child(inst->self, inst->transitionSrc);
-            obs_source_inc_active(inst->transitionSrc);
-            obs_transition_set_size(inst->transitionSrc,
-                (uint32_t)inst->canvasW, (uint32_t)inst->canvasH);
-        }
-    }
-
     { QMutexLocker lk(&s_mu); s_instances<<inst; }
     { QMutexLocker lk(&s_mu);
       QString med=s_mediaPath, ly=s_lyrics,
               sec=s_section, ttl=s_title;
       QString stit=s_scripTitle, stxt=s_scripText;
       lk.unlock();
-      applyMediaPath(inst,med,0); // no fade on first load
+      applyBgPath(inst,med,0); // no fade on first load
       updateTextChildren(inst,settings,ly,sec,ttl);
       updateScriptureChildren(inst,settings,
           stit, applySuperscript(stxt)); }
@@ -540,13 +694,18 @@ static void src_destroy(void *data)
     auto *inst=static_cast<LyricsInstance*>(data);
     { QMutexLocker lk(&s_mu); s_instances.removeAll(inst); }
     destroyMusicChild(inst);
-    destroyMediaChild(inst);
-    if (inst->transitionSrc) {
-        obs_source_dec_active(inst->transitionSrc);
-        obs_source_remove_active_child(inst->self, inst->transitionSrc);
-        obs_source_release(inst->transitionSrc);
-        inst->transitionSrc = nullptr;
+    destroyAudioSlot(inst);
+    for (int i = 0; i < 4; i++) destroyBgSlot(inst, i);
+    obs_enter_graphics();
+    if (inst->bgTexRender) {
+        gs_texrender_destroy(inst->bgTexRender);
+        inst->bgTexRender = nullptr;
     }
+    if (inst->bgFadeEffect) {
+        gs_effect_destroy(inst->bgFadeEffect);
+        inst->bgFadeEffect = nullptr;
+    }
+    obs_leave_graphics();
     obs_source_release(inst->srcLyrics);
     obs_source_release(inst->srcSection);
     obs_source_release(inst->srcTitle);
@@ -567,6 +726,8 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"bottom_bar_h",  DEF_BOTTOM_BAR_H);
     obs_data_set_default_int(s,"scrip_title_h",  DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
+    obs_data_set_default_int(s,"ctw_title_h",    DEF_SCRIP_TITLE_H);
+    obs_data_set_default_int(s,"ctw_h_margin",   DEF_SCRIP_H_MARGIN);
     obs_data_set_default_int(s,"ch_pinyin_y",         DEF_CH_PINYIN_Y);
     obs_data_set_default_int(s,"ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
     obs_data_set_default_int(s,"ch_chinese_y",        DEF_CH_CHINESE_Y);
@@ -601,6 +762,9 @@ static void src_defaults(obs_data_t *s)
     // Scripture boxes: title centred+top, text centred+middle
     setBox("scr_title_",32,1,0,ygold);
     setBox("scr_text_", 48,1,1,white);
+    // CTW boxes: independent defaults matching Scripture
+    setBox("ctw_title_",32,1,0,ygold);
+    setBox("ctw_text_", 48,1,1,white);
     // Chinese trilingual boxes (pinyin top, Chinese chars middle, English bottom)
     setBox("ch_pinyin_",  24,1,1,ygold);   // pinyin: smaller, gold-yellow
     setBox("ch_chinese_", 52,1,1,white);   // Chinese: large, white
@@ -691,6 +855,8 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"bottom_bar_h",  "Lyrics: bottom bar height (px)",    10, 400,1);
     obs_properties_add_int(cgrp,"scrip_title_h", "Scripture: title strip height (px)", 10, 400,1);
     obs_properties_add_int(cgrp,"scrip_h_margin","Scripture: left/right margin (px)",   0, 400,1);
+    obs_properties_add_int(cgrp,"ctw_title_h",  "CTW: title strip height (px)",        10, 400,1);
+    obs_properties_add_int(cgrp,"ctw_h_margin", "CTW: left/right margin (px)",          0, 400,1);
 
     // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
@@ -730,8 +896,10 @@ static obs_properties_t *src_props(void *)
     addBoxGroup(props,"lyrics_", "1.  English Lyrics — Main Text");
     addBoxGroup(props,"section_","2.  Lyrics — Section Label  (bottom-left)");
     addBoxGroup(props,"title_",  "3.  Lyrics — Song Title  (bottom-right)");
-    addBoxGroup(props,"scr_title_","4.  Scripture — Title  (top strip)");
-    addBoxGroup(props,"scr_text_", "5.  Scripture — Text  (main area)");
+    addBoxGroup(props,"ctw_title_","4.  Call to Worship — Title  (top strip)");
+    addBoxGroup(props,"ctw_text_", "5.  Call to Worship — Text  (main area)");
+    addBoxGroup(props,"scr_title_","6.  Scripture — Title  (top strip)");
+    addBoxGroup(props,"scr_text_", "7.  Scripture — Text  (main area)");
     addBoxGroup(props,"ch_pinyin_", "6.  Chinese — Pinyin  (top strip)");
     addBoxGroup(props,"ch_chinese_","7.  Chinese — Characters  (middle)");
     addBoxGroup(props,"ch_english_","8.  Chinese — English Translation  (bottom)");
@@ -762,6 +930,10 @@ static void src_update(void *data, obs_data_t *settings)
     inst->chEnglishY        = readOrDef2("ch_english_y",        DEF_CH_ENGLISH_Y);
     if(!obs_data_has_user_value(settings,"scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
+    inst->ctwTitleH  = obs_data_has_user_value(settings,"ctw_title_h")
+                       ? (int)obs_data_get_int(settings,"ctw_title_h") : DEF_SCRIP_TITLE_H;
+    inst->ctwHMargin = obs_data_has_user_value(settings,"ctw_h_margin")
+                       ? (int)obs_data_get_int(settings,"ctw_h_margin") : DEF_SCRIP_H_MARGIN;
     QMutexLocker lk(&s_mu);
     // Re-apply whichever mode is currently active so text re-layouts
     // correctly after a canvas size / font change.
@@ -769,7 +941,7 @@ static void src_update(void *data, obs_data_t *settings)
         clearChineseChildren(inst, settings);
         updateTextChildren(inst,settings,QString(),QString(),QString());
         updateScriptureChildren(inst,settings,
-            s_scripTitle, applySuperscript(s_scripText));
+            s_scripTitle, applySuperscript(s_scripText), s_ctwMode);
     } else if (s_chineseMode) {
         updateScriptureChildren(inst, settings, QString(), QString());
         updateChineseChildren(inst, settings, s_pinyin, s_lyrics, s_english);
@@ -788,6 +960,73 @@ static uint32_t src_width (void *d)
 static uint32_t src_height(void *d)
 { return (uint32_t)static_cast<LyricsInstance*>(d)->canvasH; }
 
+// ── Background render helpers ──────────────────────────────────
+
+// Scale-to-cover render of a source onto the current GS target.
+static void renderBgSourceFull(obs_source_t *src, int cW, int cH)
+{
+    uint32_t mw = obs_source_get_width(src);
+    uint32_t mh = obs_source_get_height(src);
+    if (mw > 0 && mh > 0 && ((int)mw != cW || (int)mh != cH)) {
+        float sx = (float)cW/(float)mw, sy = (float)cH/(float)mh;
+        float sc = sx > sy ? sx : sy;
+        float ox = ((float)cW - (float)mw*sc)*0.5f;
+        float oy = ((float)cH - (float)mh*sc)*0.5f;
+        gs_matrix_push();
+        gs_matrix_translate3f(ox, oy, 0.f);
+        gs_matrix_scale3f(sc, sc, 1.f);
+        obs_source_video_render(src);
+        gs_matrix_pop();
+    } else {
+        obs_source_video_render(src);
+    }
+}
+
+// Render slot at given alpha [0..1) via texrender + opacity shader.
+static void renderBgSlotAlpha(LyricsInstance *inst, int slotIdx, int cW, int cH, float alpha)
+{
+    obs_source_t *src = inst->bgSlots[slotIdx].src;
+    if (!src || alpha <= 0.f) return;
+    if (alpha >= 1.f) { renderBgSourceFull(src, cW, cH); return; }
+
+    if (!inst->bgTexRender)
+        inst->bgTexRender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+    gs_texrender_reset(inst->bgTexRender);
+    if (!gs_texrender_begin(inst->bgTexRender, (uint32_t)cW, (uint32_t)cH)) return;
+    vec4 zero; vec4_zero(&zero);
+    gs_clear(GS_CLEAR_COLOR, &zero, 1.f, 0);
+    renderBgSourceFull(src, cW, cH);
+    gs_texrender_end(inst->bgTexRender);
+
+    gs_texture_t *tex = gs_texrender_get_texture(inst->bgTexRender);
+    if (!tex) return;
+
+    if (!inst->bgFadeEffect) {
+        static const char *SRC =
+            "uniform float4x4 ViewProj;\n"
+            "uniform texture2d image;\n"
+            "uniform float opacity;\n"
+            "sampler_state smp{Filter=Linear;AddressU=Clamp;AddressV=Clamp;};\n"
+            "struct VD{float4 pos:POSITION;float2 uv:TEXCOORD0;};\n"
+            "VD VS(VD v){VD o;o.pos=mul(float4(v.pos.xyz,1.0),ViewProj);o.uv=v.uv;return o;}\n"
+            "float4 PS(VD v):TARGET{float4 c=image.Sample(smp,v.uv);c.rgba*=opacity;return c;}\n"
+            "technique Draw{pass{vertex_shader=VS(v);pixel_shader=PS(v);}}\n";
+        char *err = nullptr;
+        inst->bgFadeEffect = gs_effect_create(SRC, nullptr, &err);
+        if (err) bfree(err);
+    }
+    if (!inst->bgFadeEffect) return;
+
+    gs_blend_state_push();
+    gs_enable_blending(true);
+    gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+    gs_effect_set_texture(gs_effect_get_param_by_name(inst->bgFadeEffect, "image"), tex);
+    gs_effect_set_float  (gs_effect_get_param_by_name(inst->bgFadeEffect, "opacity"), alpha);
+    while (gs_effect_loop(inst->bgFadeEffect, "Draw"))
+        gs_draw_sprite(tex, 0, (uint32_t)cW, (uint32_t)cH);
+    gs_blend_state_pop();
+}
+
 static void src_render(void *data, gs_effect_t *effect)
 {
     auto *inst=static_cast<LyricsInstance*>(data);
@@ -795,13 +1034,79 @@ static void src_render(void *data, gs_effect_t *effect)
     int mainH=cH-inst->bottomBarH;
     int halfW=cW/2;
 
-    // ── 1. Media layer — OBS fade_transition handles crossfade ──
-    // Skip when s_mvMusicOnly: music files with embedded album art would
-    // otherwise render a still image to the OBS canvas.
-    if (inst->transitionSrc && !s_mvMusicOnly) {
-        obs_transition_set_size(inst->transitionSrc,
-            (uint32_t)cW, (uint32_t)cH);
-        obs_source_video_render(inst->transitionSrc);
+    // ── 1. Background layers 0→3 (bottom to top) ─────────────
+    // Skip when s_mvMusicOnly (music-only MV: no video to render).
+    if (!s_mvMusicOnly) {
+        for (int i = 0; i < 4; i++) {
+            auto &sl = inst->bgSlots[i];
+            if (sl.state == BgState::INACTIVE || !sl.src) continue;
+
+            // Debug layout: render each slot in its own 854×480 quadrant.
+            // RAII so gs_matrix_pop() fires automatically on any continue/exit.
+            struct DbgScope {
+                bool on;
+                DbgScope(bool enable, int slot, int cW, int cH) : on(enable) {
+                    if (!on) return;
+                    static constexpr float kAX[4] = {  0.f,   0.f, 360.f, 360.f };
+                    static constexpr float kAY[4] = {  0.f, 640.f,   0.f, 640.f };
+                    gs_matrix_push();
+                    gs_matrix_translate3f(kAX[slot], kAY[slot], 0.f);
+                    gs_matrix_scale3f(854.f / (float)cW, 480.f / (float)cH, 1.f);
+                }
+                ~DbgScope() { if (on) gs_matrix_pop(); }
+            } dbgScope(s_bgDebugLayout, i, cW, cH);
+
+            if (sl.state == BgState::WAITING) {
+                uint64_t elMs = (os_gettime_ns() - sl.stateStartNs) / 1000000ULL;
+                bool ready = elMs >= BG_READY_TIMEOUT_MS ||
+                             obs_source_get_width(sl.src) > 0;
+                if (!ready) continue; // still loading; keep old content visible
+                if (sl.waitGoFadeIn) {
+                    sl.state        = BgState::FADING_IN;
+                    sl.stateStartNs = os_gettime_ns();
+                    continue; // alpha=0 this first frame; skip render
+                } else {
+                    // Instant ACTIVE — trigger fade-out of another slot if requested
+                    int j           = sl.triggerFadeOut;
+                    uint32_t jDur   = sl.triggerFadeOutDurMs;
+                    sl.state        = BgState::ACTIVE;
+                    sl.stateStartNs = 0;
+                    sl.triggerFadeOut = -1;
+                    if (j >= 0 && j < 4 && inst->bgSlots[j].state != BgState::INACTIVE)
+                        startBgFadeOut(inst, j, jDur);
+                    renderBgSourceFull(sl.src, cW, cH);
+                    continue;
+                }
+            }
+
+            if (sl.state == BgState::ACTIVE) {
+                renderBgSourceFull(sl.src, cW, cH);
+
+            } else if (sl.state == BgState::FADING_IN) {
+                uint64_t elMs = (os_gettime_ns() - sl.stateStartNs) / 1000000ULL;
+                float alpha = sl.fadeDurMs > 0
+                    ? (float)elMs / (float)sl.fadeDurMs : 1.f;
+                if (alpha >= 1.f) {
+                    uint8_t mask    = sl.clearOnFadeIn;
+                    sl.state        = BgState::ACTIVE;
+                    sl.clearOnFadeIn = 0;
+                    for (int j = 0; j < 4; j++)
+                        if ((mask >> j) & 1u) destroyBgSlot(inst, j);
+                    renderBgSourceFull(sl.src, cW, cH);
+                } else {
+                    renderBgSlotAlpha(inst, i, cW, cH, alpha);
+                }
+
+            } else if (sl.state == BgState::FADING_OUT) {
+                uint64_t elMs = (os_gettime_ns() - sl.stateStartNs) / 1000000ULL;
+                float alpha = sl.fadeDurMs > 0
+                    ? 1.f - (float)elMs / (float)sl.fadeDurMs : 0.f;
+                if (alpha <= 0.f)
+                    destroyBgSlot(inst, i);
+                else
+                    renderBgSlotAlpha(inst, i, cW, cH, alpha);
+            }
+        }
     }
 
     // ── 2. Scripture title — top strip, inset by scripHMargin ──
@@ -889,23 +1194,26 @@ static void src_deactivate(void *data)
     }
     s_mvMode = false; s_mvMusicOnly = false;
     s_mediaPath.clear();
+    s_audioPath.clear();
     for (auto *inst : s_instances) {
         destroyMusicChild(inst);
-        applyMediaPath(inst, QString(), 0, true);
+        destroyAudioSlot(inst);
+        applyBgPath(inst, QString(), 0);
     }
 }
 
 static void src_activate(void *data)
 {
     (void)data;
-    // Ensure clean stopped state when source first becomes visible
     QMutexLocker lk(&s_mu);
-    if (s_mvMode || !s_mediaPath.isEmpty()) {
+    if (s_mvMode || !s_mediaPath.isEmpty() || !s_audioPath.isEmpty()) {
         s_mvMode = false; s_mvMusicOnly = false;
         s_mediaPath.clear();
+        s_audioPath.clear();
         for (auto *inst : s_instances) {
             destroyMusicChild(inst);
-            applyMediaPath(inst, QString(), 0, true);
+            destroyAudioSlot(inst);
+            applyBgPath(inst, QString(), 0);
         }
     }
 }
@@ -995,33 +1303,66 @@ void lyrics_renderer_push_chinese(const QString &chinese,
     }
 }
 
+// Returns the active non-MV background video source (for scrubber/pause controls).
+static obs_source_t *getBgVideoSrc(LyricsInstance *inst)
+{
+    for (int i = 3; i >= 2; i--) {
+        auto &sl = inst->bgSlots[i];
+        if (sl.src && sl.isVideo && !sl.isMvSlot &&
+            (sl.state == BgState::ACTIVE || sl.state == BgState::FADING_IN))
+            return sl.src;
+    }
+    return nullptr;
+}
+
+// Returns the active MV video source (isMvSlot=true).
+static obs_source_t *getMvVideoSrc(LyricsInstance *inst)
+{
+    for (int i = 0; i < 4; i++) {
+        auto &sl = inst->bgSlots[i];
+        if (sl.src && sl.isVideo && sl.isMvSlot)
+            return sl.src;
+    }
+    return nullptr;
+}
+
+// ── Background debug API ──────────────────────────────────────
+void lyrics_renderer_set_bg_debug(bool enable)
+{
+    QMutexLocker lk(&s_mu);
+    s_bgDebugLayout = enable;
+}
+bool lyrics_renderer_get_bg_debug()
+{
+    QMutexLocker lk(&s_mu);
+    return s_bgDebugLayout;
+}
+
 void lyrics_renderer_media_push(const QString &filePath, int fadeMs)
 {
-    // Lyrics gallery takes back control — exit MV mode so text renders again.
-    // Also clear s_mvMusicOnly so the media layer is rendered (it was suppressed
-    // while music-only MV was playing to hide album art).
     { QMutexLocker lk(&s_mu); s_mediaPath=filePath; s_mvMode=false; s_mvMusicOnly=false; }
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances)
-        applyMediaPath(inst,filePath,fadeMs,true /*loop*/);
+        applyBgPath(inst, filePath, fadeMs, true, false);
 }
 
-void lyrics_renderer_media_clear()
+void lyrics_renderer_media_clear(int fadeMs)
 {
     QMutexLocker lk(&s_mu);
-    s_mvMode = false; s_mvMusicOnly = false; // background Stop resets MV mode too
+    s_mvMode = false; s_mvMusicOnly = false;
     s_mediaPath.clear();
     for(auto *inst:s_instances)
-        applyMediaPath(inst,QString(),0,true);
+        applyBgPath(inst, QString(), fadeMs);
 }
 
 bool lyrics_renderer_media_get_time(int64_t &timeMs,int64_t &durationMs)
 {
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
-        if(!inst->srcMedia||!inst->mediaActive||inst->mediaIsImg) continue;
-        timeMs    =obs_source_media_get_time(inst->srcMedia);
-        durationMs=obs_source_media_get_duration(inst->srcMedia);
+        obs_source_t *src = getBgVideoSrc(inst);
+        if (!src) continue;
+        timeMs    = obs_source_media_get_time(src);
+        durationMs= obs_source_media_get_duration(src);
         return true;
     }
     return false;
@@ -1030,17 +1371,37 @@ bool lyrics_renderer_media_get_time(int64_t &timeMs,int64_t &durationMs)
 void lyrics_renderer_media_set_time(int64_t timeMs)
 {
     QMutexLocker lk(&s_mu);
-    for(auto *inst:s_instances)
-        if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
-            obs_source_media_set_time(inst->srcMedia,timeMs);
+    for(auto *inst:s_instances){
+        obs_source_t *src = getBgVideoSrc(inst);
+        if (src) obs_source_media_set_time(src, timeMs);
+    }
 }
 
 void lyrics_renderer_media_play_pause(bool pause)
 {
     QMutexLocker lk(&s_mu);
-    for(auto *inst:s_instances)
-        if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
-            obs_source_media_play_pause(inst->srcMedia,pause);
+    for(auto *inst:s_instances){
+        obs_source_t *src = getBgVideoSrc(inst);
+        if (src) obs_source_media_play_pause(src, pause);
+    }
+}
+
+// ── AudioBin API ──────────────────────────────────────────────
+
+void lyrics_renderer_audio_push(const QString &path)
+{
+    QMutexLocker lk(&s_mu);
+    s_audioPath = path;
+    for (auto *inst : s_instances)
+        loadAudioSlot(inst, path);
+}
+
+void lyrics_renderer_audio_clear()
+{
+    QMutexLocker lk(&s_mu);
+    s_audioPath.clear();
+    for (auto *inst : s_instances)
+        destroyAudioSlot(inst);
 }
 
 // ── MV Tab API ────────────────────────────────────────────────
@@ -1049,7 +1410,7 @@ void lyrics_renderer_mv_video_push(const QString &filePath, int fadeMs)
 {
     QMutexLocker lk(&s_mu);
     s_mvMode      = true;
-    s_mvMusicOnly = false;   // video → render the media layer
+    s_mvMusicOnly = false;
     s_mediaPath   = filePath;
     s_lyrics.clear(); s_section.clear(); s_title.clear();
     s_scriptureMode = false; s_scripTitle.clear(); s_scripText.clear();
@@ -1058,7 +1419,7 @@ void lyrics_renderer_mv_video_push(const QString &filePath, int fadeMs)
         updateTextChildren(inst,s,QString(),QString(),QString());
         updateScriptureChildren(inst,s,QString(),QString());
         obs_data_release(s);
-        applyMediaPath(inst,filePath,fadeMs,false);
+        applyBgPath(inst, filePath, fadeMs, false, true); // isMvSlot=true, non-looping
     }
 }
 
@@ -1083,8 +1444,8 @@ static bool vlcAvailable()
 bool lyrics_renderer_vlc_available() { return vlcAvailable(); }
 
 // Creates a VLC child source playing a single audio file.
-// Music is stored in inst->musicSrc — completely independent of inst->srcMedia
-// (the background picture/video slot) so that pushing a picture never kills music.
+// Music is stored in inst->musicSrc — completely independent of bgSlots
+// so that pushing a picture/video never destroys the music source.
 // Falls back to an ffmpeg_source stored in musicSrc if VLC is unavailable.
 static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
 {
@@ -1095,7 +1456,7 @@ static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
 
     if (!newChild) {
         // VLC plugin present but source creation failed — try ffmpeg fallback
-        // stored in musicSrc so it still doesn't conflict with srcMedia.
+        // stored in musicSrc so it still doesn't conflict with bgSlots.
         obs_data_t *fd = obs_data_create();
         newChild = obs_source_create_private("ffmpeg_source", "lyrics_music_ffmpeg", fd);
         obs_data_release(fd);
@@ -1143,7 +1504,7 @@ static void applyMusicPathVlc(LyricsInstance *inst, const QString &path)
     obs_source_update(newChild, cfg);
     obs_data_release(cfg);
 
-    // Tear down the old music child only — srcMedia (background picture) is untouched
+    // Tear down the old music child only — bgSlots (background) are untouched
     destroyMusicChild(inst);
 
     inst->musicSrc    = newChild;
@@ -1157,10 +1518,10 @@ void lyrics_renderer_mv_music_push(const QString &filePath)
     bool useVlc = vlcAvailable();
 
     QMutexLocker lk(&s_mu);
-    // NOTE: We do NOT set s_mvMusicOnly=true here. Music is now stored in
-    // inst->musicSrc (separate from transitionSrc/srcMedia), so album art from
-    // the VLC source can never reach the render pipeline. Keeping s_mvMusicOnly=false
-    // ensures any background picture in srcMedia continues to render uninterrupted.
+    // NOTE: We do NOT set s_mvMusicOnly=true here. Music is stored in
+    // inst->musicSrc (separate from bgSlots), so album art from the VLC source
+    // can never reach the render pipeline. Keeping s_mvMusicOnly=false ensures
+    // any background in bgSlots continues to render uninterrupted.
     s_lyrics.clear(); s_section.clear(); s_title.clear();
     s_scriptureMode = false; s_scripTitle.clear(); s_scripText.clear();
     for(auto *inst:s_instances){
@@ -1178,20 +1539,23 @@ void lyrics_renderer_mv_music_push(const QString &filePath)
 void lyrics_renderer_mv_clear(int fadeMs)
 {
     QMutexLocker lk(&s_mu);
-    if (!s_mvMode) return; // background media is playing; don't clear it
+    if (!s_mvMode) return;
     s_mvMode = false; s_mvMusicOnly = false;
     s_mediaPath.clear();
     for(auto *inst:s_instances){
         destroyMusicChild(inst);
-        applyMediaPath(inst,QString(),fadeMs,true);
+        applyBgPath(inst, QString(), fadeMs);
     }
 }
 
 void lyrics_renderer_mv_music_clear()
 {
-    // Stop only the music source — leave the background picture (srcMedia) untouched.
+    // Stop only the music source — leave bgSlots (background) untouched.
+    // Only exit MV mode if music was the sole occupant (s_mvMusicOnly=true).
+    // If a video is playing (s_mvMusicOnly=false), s_mvMode must stay true so
+    // that the video tab's stop/play-pause/scrubber controls keep working.
     QMutexLocker lk(&s_mu);
-    s_mvMode      = false;
+    if (s_mvMusicOnly) s_mvMode = false;
     s_mvMusicOnly = false;
     for(auto *inst:s_instances)
         destroyMusicChild(inst);
@@ -1202,12 +1566,10 @@ int lyrics_renderer_mv_get_state()
     QMutexLocker lk(&s_mu);
     if(!s_mvMode) return -1;
     for(auto *inst:s_instances){
-        // Music-only mode: state comes from the dedicated music slot
         if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
             return (int)obs_source_media_get_state(inst->musicSrc);
-        // Video mode: state comes from the media (picture/video) slot
-        if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
-            return (int)obs_source_media_get_state(inst->srcMedia);
+        obs_source_t *src = getMvVideoSrc(inst);
+        if (src) return (int)obs_source_media_get_state(src);
     }
     return -1;
 }
@@ -1218,13 +1580,14 @@ bool lyrics_renderer_mv_get_time(int64_t &timeMs,int64_t &durationMs)
     if(!s_mvMode) return false;
     for(auto *inst:s_instances){
         if(s_mvMusicOnly && inst->musicSrc && inst->musicActive){
-            timeMs    =obs_source_media_get_time(inst->musicSrc);
-            durationMs=obs_source_media_get_duration(inst->musicSrc);
+            timeMs    = obs_source_media_get_time(inst->musicSrc);
+            durationMs= obs_source_media_get_duration(inst->musicSrc);
             return true;
         }
-        if(!inst->srcMedia||!inst->mediaActive||inst->mediaIsImg) continue;
-        timeMs    =obs_source_media_get_time(inst->srcMedia);
-        durationMs=obs_source_media_get_duration(inst->srcMedia);
+        obs_source_t *src = getMvVideoSrc(inst);
+        if (!src) continue;
+        timeMs    = obs_source_media_get_time(src);
+        durationMs= obs_source_media_get_duration(src);
         return true;
     }
     return false;
@@ -1236,9 +1599,11 @@ void lyrics_renderer_mv_set_time(int64_t timeMs)
     if(!s_mvMode) return;
     for(auto *inst:s_instances){
         if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
-            obs_source_media_set_time(inst->musicSrc,timeMs);
-        else if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
-            obs_source_media_set_time(inst->srcMedia,timeMs);
+            obs_source_media_set_time(inst->musicSrc, timeMs);
+        else {
+            obs_source_t *src = getMvVideoSrc(inst);
+            if (src) obs_source_media_set_time(src, timeMs);
+        }
     }
 }
 
@@ -1248,9 +1613,11 @@ void lyrics_renderer_mv_play_pause(bool pause)
     if(!s_mvMode) return;
     for(auto *inst:s_instances){
         if(s_mvMusicOnly && inst->musicSrc && inst->musicActive)
-            obs_source_media_play_pause(inst->musicSrc,pause);
-        else if(inst->srcMedia&&inst->mediaActive&&!inst->mediaIsImg)
-            obs_source_media_play_pause(inst->srcMedia,pause);
+            obs_source_media_play_pause(inst->musicSrc, pause);
+        else {
+            obs_source_t *src = getMvVideoSrc(inst);
+            if (src) obs_source_media_play_pause(src, pause);
+        }
     }
 }
 
@@ -1300,18 +1667,17 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
 {
     QMutexLocker lk(&s_mu);
     s_scriptureMode = true;
-    s_scripTitle    = title; // store raw text (re-applied on settings change)
+    s_ctwMode       = false;
+    s_scripTitle    = title;
     s_scripText     = text;
-    // Clear lyrics so both don't show simultaneously
     s_chineseMode=false; s_pinyin.clear(); s_english.clear();
     s_lyrics.clear(); s_section.clear(); s_title.clear();
-    // Preprocess: digits outside [...] become Unicode superscripts on text only; title is unchanged.
     QString dispText = applySuperscript(text);
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
         clearChineseChildren(inst,s);
-        updateTextChildren(inst,s,QString(),QString(),QString()); // clear lyrics
-        updateScriptureChildren(inst,s,title,dispText);
+        updateTextChildren(inst,s,QString(),QString(),QString());
+        updateScriptureChildren(inst,s,title,dispText,false);
         obs_data_release(s);
     }
 }
@@ -1319,14 +1685,75 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
 void lyrics_renderer_scripture_clear()
 {
     QMutexLocker lk(&s_mu);
+    if (s_ctwMode) return; // don't clear if CTW is the active mode
     s_scriptureMode = false;
     s_scripTitle.clear();
     s_scripText.clear();
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
-        updateScriptureChildren(inst,s,QString(),QString());
+        updateScriptureChildren(inst,s,QString(),QString(),false);
         obs_data_release(s);
     }
+}
+
+// ── Call to Worship Tab API ────────────────────────────────────
+
+void lyrics_renderer_ctw_push(const QString &title, const QString &text)
+{
+    QMutexLocker lk(&s_mu);
+    s_scriptureMode = true;
+    s_ctwMode       = true;
+    s_scripTitle    = title;
+    s_scripText     = text;
+    s_chineseMode=false; s_pinyin.clear(); s_english.clear();
+    s_lyrics.clear(); s_section.clear(); s_title.clear();
+    QString dispText = applySuperscript(text);
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        clearChineseChildren(inst,s);
+        updateTextChildren(inst,s,QString(),QString(),QString());
+        updateScriptureChildren(inst,s,title,dispText,true);
+        obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_ctw_clear()
+{
+    QMutexLocker lk(&s_mu);
+    if (!s_ctwMode) return; // don't clear if Scripture is the active mode
+    s_scriptureMode = false;
+    s_ctwMode       = false;
+    s_scripTitle.clear();
+    s_scripText.clear();
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        updateScriptureChildren(inst,s,QString(),QString(),true);
+        obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_set_ctw_text_color(uint32_t fontColor, uint32_t outlineColor)
+{
+    QMutexLocker lk(&s_mu);
+    for(auto *inst:s_instances){
+        obs_data_t *s=obs_source_get_settings(inst->self);
+        obs_data_set_int(s,"ctw_text_color",
+                         (long long)(fontColor   & 0x00FFFFFF));
+        obs_data_set_int(s,"ctw_text_outline_color",
+                         (long long)(outlineColor & 0x00FFFFFF));
+        if(s_scriptureMode && s_ctwMode)
+            updateScriptureChildren(inst,s,
+                s_scripTitle, applySuperscript(s_scripText), true);
+        obs_data_release(s);
+    }
+}
+
+// ── Settings access ────────────────────────────────────────────
+
+obs_source_t *lyrics_renderer_get_source()
+{
+    QMutexLocker lk(&s_mu);
+    return s_instances.isEmpty() ? nullptr : s_instances.first()->self;
 }
 
 void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor)
@@ -1353,9 +1780,9 @@ void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
                          (long long)(fontColor   & 0x00FFFFFF));
         obs_data_set_int(s,"scr_text_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        if(s_scriptureMode)
+        if(s_scriptureMode && !s_ctwMode)
             updateScriptureChildren(inst,s,
-                s_scripTitle, applySuperscript(s_scripText));
+                s_scripTitle, applySuperscript(s_scripText), false);
         obs_data_release(s);
     }
 }

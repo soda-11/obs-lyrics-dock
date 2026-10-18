@@ -26,12 +26,15 @@ struct LyricsSlide {
     QString pinyin;       // non-empty only when isChinese && showPinyin
     QString english;      // non-empty only when isChinese && showTranslation
     bool    isChinese = false;
+    QString backgroundPath; // effective background (section override → song default → "")
 };
 
 // ── Section ───────────────────────────────────────────────────
 struct LyricsSection {
     SectionType type  = SectionType::Verse;
     QString     label;
+
+    QString     backgroundPath; // optional background media (empty = inherit song default)
 
     // ── English mode (isChinese == false) ─────────────────────
     QString     text;   // English lyrics — blank line = slide break
@@ -60,6 +63,7 @@ struct Song {
     QString              key;
     QString              tempo;
     QString              copyright;
+    QString              backgroundPath; // default background for all sections of this song
     QList<LyricsSection> sections;
 
     // Returns all slides across all sections.

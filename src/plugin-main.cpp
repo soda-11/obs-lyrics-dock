@@ -25,7 +25,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("obs-lyrics-dock", "en-US")
 
 MODULE_EXPORT const char *obs_module_description()
 {
-    return "Lyrics Dock v10.0.0";
+    return "SSO v2.0";
 }
 
 static LyricsDock      *s_dock     = nullptr;
@@ -199,6 +199,9 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
     if (event == OBS_FRONTEND_EVENT_EXIT) {
         saveHotkeyBindings();
         if (s_dock) {
+            // Stop all media (incl. any OBS sources) before OBS tears down its
+            // audio context — prevents mp_media_thread / copy_audio_data crashes.
+            s_dock->stopAllMedia();
             s_dock->saveState();
             s_dock = nullptr;
         }
@@ -296,7 +299,7 @@ MODULE_EXPORT bool obs_module_load()
     // change event to trigger it first.
     s_dock->broadcastSequence();
 
-    obs_frontend_add_dock_by_id("obs-lyrics-dock", "Lyrics", s_dock);
+    obs_frontend_add_dock_by_id("obs-lyrics-dock", "SSO v2.0", s_dock);
 
     // ── Register OBS hotkeys ──────────────────────────────────
     {

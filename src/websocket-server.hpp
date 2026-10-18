@@ -42,8 +42,10 @@ public:
     void broadcastClear();
     void broadcastScene(const QString &sceneName);
     void broadcastMediaState(const QString &filePath);
-    void broadcastMediaList(const QStringList &paths);
+    // tab: "lyrics" | "ctw" | "scripture"
+    void broadcastMediaList(const QString &tab, const QStringList &paths);
     void broadcastSongs(const QJsonArray &songs);
+    void broadcastServiceOrder(const QJsonArray &order);
     void broadcastMvState(const QString &mode, const QString &path);
     void broadcastMvVideoList(const QStringList &paths);
     void broadcastMvMusicList(const QStringList &paths);
@@ -51,6 +53,22 @@ public:
     void broadcastScripture(const QString &title, const QString &text);
     // Broadcasts title+raw text so remote clients can rebuild their slide list
     void broadcastScriptureState(const QString &title, const QString &text);
+    // Broadcasts Call to Worship full state (title+text) for slide rebuild on remote
+    void broadcastCtwState(const QString &title, const QString &text);
+    // Broadcasts current PowerPoint slide position to all manager clients
+    void broadcastPptState(int current, int total, const QString &title = QString());
+    // Broadcasts which presentation type is active: 0=PPT 1=GSlides 2=Canva -1=none
+    void broadcastPresentationActive(int type);
+    // Broadcasts which content tab is active ("ctw"|"scr"|"lyr"|"ppt") — used by LP remote
+    void broadcastActiveMode(const QString &mode);
+    // Broadcasts color preset colors + active index to all manager clients
+    void broadcastColorPresets(const QJsonArray &presets, int activeIdx);
+    // Broadcasts AudioBin file list to all manager clients
+    void broadcastAudioBinList(const QStringList &paths);
+    // Broadcasts AudioBin play/stop state (index=-1 means stopped)
+    void broadcastAudioBinState(int activeIndex, bool playing);
+    // Broadcasts a JPEG preview frame to all authed clients (for remote.html preview tab)
+    void broadcastPreview(const QByteArray &jpegData);
     void setPin(const QString &pin) { m_pin = pin; }
     QString pin() const { return m_pin; }
 
@@ -65,6 +83,7 @@ private slots:
     void onReadyRead();
     void onDisconnected();
     void sendPingAll();   // periodic keepalive ping to all connected clients
+    void onMvTimeTick();  // 500 ms broadcast of video/music playback position
 
 private:
     void        handleHttpOrWs(WsClient *client, const QByteArray &data);
@@ -78,6 +97,7 @@ private:
     QJsonObject buildStateForRole(const QString &role) const;
     QByteArray  serveHtmlPage() const;
 
+    QTimer           *m_mvTimeTimer = nullptr; // 500 ms position broadcast when MV playing
     QTcpServer       *m_server    = nullptr;
     LyricsDock       *m_dock      = nullptr; // weak ref — not owned
     QList<WsClient*>  m_clients;
@@ -91,8 +111,11 @@ private:
     int         m_lastSlideIndex = -1;
     QString     m_lastScene;
     QString     m_lastMediaPath;
-    QStringList m_lastMediaList;
+    QStringList m_lastLyricsMediaList;
+    QStringList m_lastCtwMediaList;
+    QStringList m_lastScriptureMediaList;
     QJsonArray  m_lastSongsJson;
+    QJsonArray  m_lastServiceOrderJson;
     QString     m_pin;             // empty = no auth required
     QString     m_lastMvMode;      // "video" | "music" | ""
     QString     m_lastMvPath;
@@ -102,6 +125,13 @@ private:
     QString     m_lastScripText;     // currently displayed slide text
     QString     m_lastScripFullTitle;// full title from Text panel
     QString     m_lastScripFullText; // full raw text from Text panel
+    QString     m_lastCtwTitle;      // CTW full title (for new-connection replay)
+    QString     m_lastCtwText;       // CTW full raw text
+    QJsonArray  m_lastColorPresets;  // array of {font, outline} per preset
+    int         m_lastActivePreset = -1; // which preset is currently active
+    QStringList m_lastAudioBinList;
+    int         m_lastAudioBinActive  = -1;
+    bool        m_lastAudioBinPlaying = false;
 };
 
 WebSocketServer  *lyricsWsServer();

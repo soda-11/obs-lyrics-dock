@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OBS Lyrics Dock — User Manual v10.2.0</title>
+<style>
+  /* ── Reset & base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0f1117;
+    --bg2:       #181c27;
+    --bg3:       #1e2333;
+    --border:    #2a3050;
+    --accent:    #4da6ff;
+    --accent2:   #7ec8ff;
+    --gold:      #ffd966;
+    --success:   #4caf82;
+    --text:      #d8dce8;
+    --text2:     #8a93b0;
+    --text3:     #555e7a;
+    --sidebar-w: 280px;
+    --header-h:  64px;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  /* ── Top header ── */
+  header {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--header-h);
+    background: #0a0d14;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 28px;
+    gap: 16px;
+    z-index: 100;
+  }
+  .header-logo {
+    width: 32px; height: 32px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .header-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.3px;
+  }
+  .header-version {
+    background: #1e3a5f;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 20px;
+    border: 1px solid #2a5a8c;
+    white-space: nowrap;
+  }
+
+  /* ── Layout ── */
+  .layout {
+    display: flex;
+    margin-top: var(--header-h);
+    flex: 1;
+  }
+
+  /* ── Sidebar ── */
+  nav {
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    width: var(--sidebar-w);
+    height: calc(100vh - var(--header-h));
+    overflow-y: auto;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    padding: 24px 0 40px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  nav::-webkit-scrollbar { width: 4px; }
+  nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .nav-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text3);
+    padding: 16px 20px 6px;
+  }
+
+  nav a {
+    display: block;
+    padding: 7px 20px;
+    color: var(--text2);
+    text-decoration: none;
+    font-size: 13px;
+    line-height: 1.4;
+    border-left: 3px solid transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  nav a:hover {
+    color: var(--accent2);
+    background: rgba(77, 166, 255, 0.06);
+    border-left-color: var(--accent);
+  }
+  nav a.sub {
+    padding-left: 34px;
+    font-size: 12px;
+    color: var(--text3);
+  }
+  nav a.sub:hover { color: var(--accent2); }
+
+  /* ── Main content ── */
+  main {
+    margin-left: var(--sidebar-w);
+    flex: 1;
+    padding: 52px 60px 80px;
+    max-width: 900px;
+  }
+
+  /* ── Section anchors ── */
+  .section {
+    margin-bottom: 64px;
+    padding-top: 8px;
+  }
+
+  /* ── Headings ── */
+  h1 {
+    font-size: 34px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.8px;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+  .subtitle {
+    font-size: 15px;
+    color: var(--text2);
+    margin-bottom: 32px;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .sec-num {
+    background: var(--accent);
+    color: #000;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent2);
+    margin: 28px 0 12px;
+  }
+
+  h4 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gold);
+    margin: 20px 0 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Paragraphs & lists ── */
+  p { margin-bottom: 14px; }
+
+  ul, ol {
+    padding-left: 22px;
+    margin-bottom: 14px;
+  }
+  li { margin-bottom: 6px; }
+  li::marker { color: var(--accent); }
+
+  /* ── Inline code ── */
+  code {
+    background: #1a2035;
+    color: #a8d4ff;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #2a3a5c;
+  }
+
+  /* ── Code block ── */
+  pre {
+    background: #0d1120;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 16px 0;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: #a8d4ff;
+    line-height: 1.6;
+  }
+
+  /* ── Tables ── */
+  .table-wrap {
+    overflow-x: auto;
+    margin: 16px 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  thead { background: #161c2e; }
+  th {
+    text-align: left;
+    padding: 11px 16px;
+    color: var(--accent2);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #1e2640;
+    vertical-align: top;
+    color: var(--text);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+  /* ── Callout boxes ── */
+  .callout {
+    display: flex;
+    gap: 14px;
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin: 18px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .callout-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+  .callout.note {
+    background: #0e1e3a;
+    border: 1px solid #1e4080;
+    color: #8ec8ff;
+  }
+  .callout.tip {
+    background: #0e2a1e;
+    border: 1px solid #1a5030;
+    color: #7dd8a8;
+  }
+  .callout.warn {
+    background: #2a1e0a;
+    border: 1px solid #5a3a10;
+    color: #e8b060;
+  }
+
+  /* ── Key badge ── */
+  kbd {
+    background: #1e2640;
+    border: 1px solid #3a4870;
+    border-bottom: 3px solid #2a3a60;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-family: inherit;
+    font-size: 13px;
+    color: #c8d8f8;
+  }
+
+  /* ── Strong ── */
+  strong { color: #fff; font-weight: 600; }
+
+  /* ── Layer diagram ── */
+  .layer-diagram {
+    background: #0d1120;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .layer-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 9px 0;
+    border-bottom: 1px solid #1a2035;
+  }
+  .layer-row:last-child { border-bottom: none; }
+  .layer-num {
+    background: #1a2a4a;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 10px;
+    border-radius: 12px;
+    min-width: 36px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .layer-label { font-size: 14px; color: var(--text); }
+  .layer-note { font-size: 12px; color: var(--text3); margin-left: auto; white-space: nowrap; }
+
+  /* ── Layout diagram ── */
+  .layout-diagram {
+    display: grid;
+    grid-template-columns: 200px 1fr 180px;
+    gap: 6px;
+    margin: 16px 0;
+  }
+  .layout-box {
+    background: #1a2035;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    font-size: 13px;
+  }
+  .layout-box .box-title { color: var(--accent); font-weight: 700; margin-bottom: 4px; }
+  .layout-box .box-sub { color: var(--text3); font-size: 11px; }
+
+  /* ── Remote role cards ── */
+  .role-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 18px 0;
+  }
+  .role-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .role-card.manager { border-top: 3px solid var(--accent); }
+  .role-card.viewer  { border-top: 3px solid var(--success); }
+  .role-card h4 { margin-top: 0; }
+  .role-card ul { margin-bottom: 0; }
+
+  /* ── Feature grid ── */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin: 18px 0;
+  }
+  .feature-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .feature-icon { font-size: 20px; flex-shrink: 0; }
+  .feature-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+
+  /* ── Steps ── */
+  .steps { list-style: none; padding: 0; counter-reset: step; margin: 16px 0; }
+  .steps li {
+    counter-increment: step;
+    display: flex;
+    gap: 14px;
+    margin-bottom: 12px;
+    align-items: flex-start;
+  }
+  .steps li::before {
+    content: counter(step);
+    background: var(--accent);
+    color: #000;
+    font-size: 12px;
+    font-weight: 800;
+    min-width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  /* ── Divider ── */
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+  }
+
+  /* ── Footer ── */
+  footer {
+    margin-left: var(--sidebar-w);
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    padding: 20px 60px;
+    font-size: 12px;
+    color: var(--text3);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* ── Print ── */
+  @media print {
+    nav, header { display: none; }
+    main { margin-left: 0; padding: 20px; max-width: 100%; }
+    footer { margin-left: 0; }
+    .section { page-break-inside: avoid; }
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    nav { display: none; }
+    main { margin-left: 0; padding: 32px 24px 60px; }
+    footer { margin-left: 0; }
+    .role-cards { grid-template-columns: 1fr; }
+    .layout-diagram { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="header-logo">🎵</div>
+  <div class="header-title">OBS Lyrics Dock</div>
+  <div class="header-version">v10.2.0</div>
+</header>
+
+<!-- ── Sidebar navigation ── -->
+<div class="layout">
+<nav>
+  <div class="nav-section-label">Getting Started</div>
+  <a href="#overview">1. Overview</a>
+  <a href="#installation">2. Installation</a>
+  <a href="#setup">3. First-Time Setup</a>
+
+  <div class="nav-section-label">Dock Tabs</div>
+  <a href="#lyrics-tab">4. Lyrics Tab</a>
+  <a href="#song-library" class="sub">4.1 Song Library</a>
+  <a href="#creating-songs" class="sub">4.2 Creating &amp; Editing Songs</a>
+  <a href="#show-sequence" class="sub">4.3 Show Sequence</a>
+  <a href="#slide-panel" class="sub">4.4 Slide Panel</a>
+  <a href="#background-gallery" class="sub">4.5 Background Gallery</a>
+  <a href="#color-presets" class="sub">4.6 Color Presets</a>
+  <a href="#navigation" class="sub">4.7 Navigation Controls</a>
+  <a href="#scripture-tab">5. Scripture Tab</a>
+  <a href="#mv-tab">6. MV Tab</a>
+  <a href="#websocket-tab">7. WebSocket — Remote</a>
+  <a href="#connecting" class="sub">7.1 Connecting Your Phone</a>
+  <a href="#pin-auth" class="sub">7.2 PIN Authentication</a>
+  <a href="#manager-role" class="sub">7.3 Manager Role</a>
+  <a href="#confidence-monitor" class="sub">7.4 Confidence Monitor</a>
+  <a href="#score-view" class="sub">7.5 Score View</a>
+
+  <div class="nav-section-label">Reference</div>
+  <a href="#obs-source">8. OBS Source</a>
+  <a href="#tips">9. Tips &amp; Best Practices</a>
+</nav>
+
+<!-- ── Main content ── -->
+<main>
+
+  <!-- Title -->
+  <h1>OBS Lyrics Dock</h1>
+  <div class="subtitle">User Manual &nbsp;·&nbsp; Version 10.2.0 &nbsp;·&nbsp; Windows 10/11 x64</div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 1. Overview -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="overview">
+    <h2><span class="sec-num">1</span> Overview</h2>
+    <p><strong>OBS Lyrics Dock</strong> is an OBS Studio plugin for live worship and event production. It lets you display song lyrics, Bible scriptures, and background media on your OBS canvas — all from a dedicated dock panel inside OBS. A built-in WebSocket server lets your team control slides from their phones using any web browser, with no app to install.</p>
+
+    <div class="feature-grid">
+      <div class="feature-item">
+        <div class="feature-icon">🎵</div>
+        <div class="feature-text">Song library with full lyrics management</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">📋</div>
+        <div class="feature-text">Ordered show sequence for your service</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🖱️</div>
+        <div class="feature-text">Visual slide cards — click to push to OBS instantly</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🖼️</div>
+        <div class="feature-text">Background images &amp; video with smooth crossfade</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">中</div>
+        <div class="feature-text">Chinese trilingual mode (Pinyin + Characters + English)</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">📖</div>
+        <div class="feature-text">Bible Scripture display with auto slide splitting</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🎬</div>
+        <div class="feature-text">Music Video playback — video and audio</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">📱</div>
+        <div class="feature-text">Wi-Fi remote control — no app, just a browser</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">👥</div>
+        <div class="feature-text">Manager, Confidence Monitor &amp; Score View roles</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-text">PIN-protected remote access</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 2. Installation -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="installation">
+    <h2><span class="sec-num">2</span> Installation</h2>
+
+    <h3>Using the Installer (Recommended)</h3>
+    <ol class="steps">
+      <li>Download <strong>OBS-Lyrics-Dock-v10.2.0-Setup.exe</strong></li>
+      <li>Close OBS Studio completely</li>
+      <li>Right-click the installer → <strong>Run as administrator</strong></li>
+      <li>Follow the setup wizard — it will auto-detect your OBS installation</li>
+      <li>Launch OBS Studio</li>
+    </ol>
+
+    <h3>Manual Installation</h3>
+    <p>Copy the following files into your OBS Studio folder:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Destination</th></tr></thead>
+        <tbody>
+          <tr><td><code>obs-lyrics-dock.dll</code></td><td><code>C:\Program Files\obs-studio\obs-plugins\64bit\</code></td></tr>
+          <tr><td><code>remote.html</code></td><td><code>C:\Program Files\obs-studio\data\obs-plugins\obs-lyrics-dock\</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn">
+      <div class="callout-icon">⚠️</div>
+      <div>OBS must be closed before copying the DLL. Run the copy as Administrator if prompted.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 3. First-Time Setup -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="setup">
+    <h2><span class="sec-num">3</span> First-Time Setup</h2>
+
+    <h3>Step 1 — Open the Dock</h3>
+    <p>In OBS, go to <strong>View → Docks → OBS Lyrics Dock</strong>. The dock panel will appear. You can float it, resize it, or snap it to any side of the OBS window.</p>
+
+    <h3>Step 2 — Add the Lyrics Source</h3>
+    <ol class="steps">
+      <li>In your OBS <strong>Sources</strong> panel, click <strong>+</strong> → <strong>Lyrics</strong></li>
+      <li>Name it (e.g. "Lyrics") and click OK</li>
+      <li>Resize and position the source on your scene — typically full-screen</li>
+    </ol>
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div>You only need to add this source once. It persists across OBS restarts.</div>
+    </div>
+
+    <h3>Step 3 — Configure the Source</h3>
+    <p>Right-click the Lyrics source → <strong>Properties</strong> to open the settings panel. Key settings to check:</p>
+    <ul>
+      <li><strong>Canvas size</strong> — match your OBS output resolution (default 1280×720)</li>
+      <li><strong>Bottom bar height</strong> — height of the section/title strip at the bottom</li>
+      <li><strong>Font, size, colour, and outline</strong> for each text layer</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 4. Lyrics Tab -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="lyrics-tab">
+    <h2><span class="sec-num">4</span> The Lyrics Tab</h2>
+    <p>The Lyrics tab is divided into three panels side by side:</p>
+    <div class="layout-diagram">
+      <div class="layout-box">
+        <div class="box-title">Show Sequence</div>
+        <div class="box-sub">Ordered song list for the service</div>
+      </div>
+      <div class="layout-box">
+        <div class="box-title">Slides</div>
+        <div class="box-sub">Visual slide cards for the selected song</div>
+      </div>
+      <div class="layout-box">
+        <div class="box-title">Background</div>
+        <div class="box-sub">Image &amp; video gallery</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4.1 -->
+  <div class="section" id="song-library">
+    <h2><span class="sec-num">4.1</span> Song Library</h2>
+    <p>The Song Library is a persistent database of all your songs, stored in <code>%APPDATA%\obs-lyrics-dock\songs.json</code>.</p>
+    <p>To open it, click <strong>＋ Manage Songs</strong> at the top of the Show Sequence panel.</p>
+
+    <h3>Library Window Layout</h3>
+    <ul>
+      <li><strong>Left panel</strong> — searchable list of all songs (✓ marks songs already in the current sequence)</li>
+      <li><strong>Right panel</strong> — full lyrics preview for the selected song</li>
+      <li><strong>Add / Remove</strong> — add or remove the selected song from the show sequence</li>
+      <li><strong>New Song</strong> — create a brand-new song from scratch</li>
+      <li><strong>Delete</strong> — permanently remove a song from the library (cannot be undone)</li>
+    </ul>
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div>Right-click any song in the list for a context menu with Add, Remove, and Edit options.</div>
+    </div>
+  </div>
+
+  <!-- 4.2 -->
+  <div class="section" id="creating-songs">
+    <h2><span class="sec-num">4.2</span> Creating &amp; Editing Songs</h2>
+    <p>Click <strong>New Song</strong> in the library, or right-click an existing song and choose <strong>Edit Song</strong>, to open the song editor.</p>
+
+    <h3>Song Fields</h3>
+    <ul>
+      <li><strong>Title</strong> and <strong>Artist</strong> — displayed in the sequence list and on slide cards</li>
+      <li><strong>Sections</strong> — a song is composed of one or more sections (Verse, Chorus, Bridge, Intro, Outro, Pre-Chorus, etc.)</li>
+    </ul>
+
+    <h3>Each Section Has</h3>
+    <ul>
+      <li>A <strong>type</strong> (e.g. Verse, Chorus) and optional custom <strong>label</strong></li>
+      <li>A <strong>lyrics text box</strong> — type or paste the full lyrics for that section</li>
+      <li>An optional <strong>Chinese mode</strong> toggle for trilingual slides</li>
+    </ul>
+
+    <h3>Slide Splitting</h3>
+    <p>Lyrics are automatically split into slides based on the <strong>Lines per Slide</strong> setting (default: 4). A blank line in the lyrics always forces a new slide, regardless of the lines setting.</p>
+
+    <h3>Chinese Trilingual Mode</h3>
+    <p>Enable this per-section when your lyrics contain Chinese characters. You get three text fields:</p>
+    <ul>
+      <li><strong>Pinyin</strong> — romanised pronunciation, displayed above the characters</li>
+      <li><strong>Chinese Characters</strong> — the main character text</li>
+      <li><strong>English Translation</strong> — displayed below</li>
+    </ul>
+    <p>Each content line is placed in its own strip on the OBS canvas so the three layers align correctly.</p>
+
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div><strong>Save as New:</strong> When editing an existing song, tick "Save as New" to create a copy with a new ID — useful for song variants without overwriting the original.</div>
+    </div>
+  </div>
+
+  <!-- 4.3 -->
+  <div class="section" id="show-sequence">
+    <h2><span class="sec-num">4.3</span> Show Sequence</h2>
+    <p>The Show Sequence is the ordered list of songs for your service. It is saved automatically and restored when OBS reopens.</p>
+
+    <h3>Building the Sequence</h3>
+    <ol class="steps">
+      <li>Click <strong>＋ Manage Songs</strong> to open the library</li>
+      <li>Select a song and click <strong>Add</strong> (songs marked ✓ are already in the sequence)</li>
+      <li>Close the library when done</li>
+    </ol>
+
+    <h3>Reordering</h3>
+    <ul>
+      <li><strong>Drag and drop</strong> rows up or down directly in the sequence list</li>
+      <li>Or use the <strong>↑ / ↓ buttons</strong> below the list</li>
+    </ul>
+
+    <h3>Other Actions</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Control</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>🗑️ Trash icon</td><td>Remove from sequence (does not delete from library)</td></tr>
+          <tr><td>✏️ Pen icon</td><td>Edit the selected song's lyrics without leaving the dock</td></tr>
+          <tr><td>Right-click</td><td>Context menu with Remove and Edit options</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Clicking a song in the sequence loads its slides into the Slide panel.</p>
+  </div>
+
+  <!-- 4.4 -->
+  <div class="section" id="slide-panel">
+    <h2><span class="sec-num">4.4</span> Slide Panel</h2>
+    <p>The Slide panel shows all slides for the currently selected song as a grid of cards. Each card displays:</p>
+    <ul>
+      <li><strong>Section label</strong> (top-left, yellow) — e.g. "Verse 1", "Chorus"</li>
+      <li><strong>Slide number</strong> (top-right, cyan)</li>
+      <li><strong>Lyrics text</strong> (body)</li>
+      <li>Chinese slides show a <strong>中</strong> marker and display characters + English translation</li>
+    </ul>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div><strong>Clicking a card</strong> immediately pushes that slide's text to the OBS Lyrics source. The active card is highlighted in blue.<br><br>
+      <strong>Right-clicking a card</strong> opens the song editor focused on that section, for quick on-the-fly edits. Changes apply immediately to the OBS preview.</div>
+    </div>
+
+    <h3>Display Controls (Bottom Bar)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Control</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>◄ / ► buttons</td><td>Previous / Next slide</td></tr>
+          <tr><td><kbd>←</kbd> / <kbd>→</kbd> keyboard</td><td>Previous / Next slide (when dock is focused)</td></tr>
+          <tr><td>Slide counter (e.g. 3/12)</td><td>Current slide position within the song</td></tr>
+          <tr><td>Zoom slider (25%–200%)</td><td>Scale slide card text size</td></tr>
+          <tr><td>W slider (10%–100%)</td><td>Card width as % of panel — narrow for more columns, wide for fewer</td></tr>
+          <tr><td>Font picker</td><td>Font shown on slide cards (display only, does not affect OBS rendering)</td></tr>
+          <tr><td>Lines spinbox (1–6)</td><td>Maximum lines per slide</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4.5 -->
+  <div class="section" id="background-gallery">
+    <h2><span class="sec-num">4.5</span> Background Gallery</h2>
+    <p>The Background panel (right side of the Lyrics tab) holds a collection of images and videos to display behind the lyrics on the OBS canvas.</p>
+    <ul>
+      <li><strong>Double-click</strong> any item to push it as the background, with a smooth 500 ms crossfade</li>
+      <li>The active background item is highlighted</li>
+      <li>Click <strong>■ Stop Background Media</strong> to remove the background and fade to black</li>
+      <li>Add items using the <strong>+</strong> button at the bottom of the gallery</li>
+      <li>Video backgrounds loop continuously</li>
+    </ul>
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div>Playing a background from this gallery keeps MV music playing — the audio continues uninterrupted. Only the visual layer changes.</div>
+    </div>
+  </div>
+
+  <!-- 4.6 -->
+  <div class="section" id="color-presets">
+    <h2><span class="sec-num">4.6</span> Color Presets</h2>
+    <p>Five color preset buttons sit in the Slides panel header for quickly changing the text colour during a service.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Button</th><th>Applies to</th></tr></thead>
+        <tbody>
+          <tr><td><strong>1, 2, 3</strong></td><td>Lyrics text and Chinese characters + English translation</td></tr>
+          <tr><td><strong>Py: 4, 5</strong></td><td>Pinyin text only</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li><strong>Left-click</strong> a button to apply its stored colour immediately to the live OBS output</li>
+      <li><strong>Right-click</strong> a button to open the colour picker and change its stored colour</li>
+    </ul>
+    <p>Colours are saved to disk automatically and restored on next launch.</p>
+  </div>
+
+  <!-- 4.7 -->
+  <div class="section" id="navigation">
+    <h2><span class="sec-num">4.7</span> Navigation Controls</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Action</th><th>How</th></tr></thead>
+        <tbody>
+          <tr><td>Next slide</td><td>Click ► button, or press <kbd>→</kbd></td></tr>
+          <tr><td>Previous slide</td><td>Click ◄ button, or press <kbd>←</kbd></td></tr>
+          <tr><td>Blackout lyrics</td><td>Click <strong>■ Blank</strong> button (top-right of Slides header)</td></tr>
+          <tr><td>Push a specific slide</td><td>Click its card directly</td></tr>
+          <tr><td>Edit a slide's section</td><td>Right-click its card → <em>Edit this section</em></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 5. Scripture Tab -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="scripture-tab">
+    <h2><span class="sec-num">5</span> The Scripture Tab</h2>
+    <p>The Scripture tab lets you display Bible verses as a separate overlay — independent of the song lyrics.</p>
+
+    <h3>How to Use</h3>
+    <ol class="steps">
+      <li>Click the <strong>Scripture</strong> tab in the dock</li>
+      <li>Type a reference in the <strong>Title</strong> field (e.g. "John 3:16")</li>
+      <li>Paste the verse text in the <strong>Text</strong> field</li>
+      <li>Click <strong>▶ Apply</strong> — the text is split into slides (4 lines per slide, paragraph-aware)</li>
+      <li>Click any slide to push it to the OBS canvas</li>
+    </ol>
+
+    <h3>Background Gallery</h3>
+    <p>The Scripture tab has its own background gallery, separate from the Lyrics gallery. You can set a different background image specifically for Scripture display.</p>
+
+    <h3>Clearing</h3>
+    <p>Click <strong>⬛ Clear</strong> to remove the Scripture overlay from the OBS canvas.</p>
+
+    <h3>Behaviour with Other Tabs</h3>
+    <ul>
+      <li>Clicking a Scripture slide clears any active lyrics text from the canvas</li>
+      <li>Clicking a lyrics slide clears any active scripture text</li>
+      <li>The MV tab and Scripture tab are mutually exclusive on the canvas</li>
+    </ul>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 6. MV Tab -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="mv-tab">
+    <h2><span class="sec-num">6</span> The MV Tab</h2>
+    <p>The MV (Music Video) tab lets you play video or music files through the OBS canvas.</p>
+
+    <h3>Video Playback</h3>
+    <ul>
+      <li>Click a video in the <strong>Videos</strong> list to play it full-screen on the OBS canvas</li>
+      <li>Lyrics text is hidden while a video plays</li>
+      <li>The video plays once and stops at the end</li>
+    </ul>
+
+    <h3>Music Playback</h3>
+    <ul>
+      <li>Click a track in the <strong>Music</strong> list to start audio playback</li>
+      <li>The OBS canvas remains visually clear — album art is suppressed</li>
+      <li>You can then use the <strong>Lyrics tab</strong> to display lyrics over a background while music plays</li>
+    </ul>
+
+    <div class="callout tip">
+      <div class="callout-icon">💡</div>
+      <div>Use Music mode for backing tracks during worship — the audio plays through OBS while you independently control lyrics and background from the Lyrics tab.</div>
+    </div>
+
+    <h3>Now Playing Bar</h3>
+    <p>When playback is active, a bar at the top of the MV panel shows the current file name and a <strong>■ Stop</strong> button.</p>
+
+    <h3>Managing the MV List</h3>
+    <p>Add video and music files using the <strong>+</strong> buttons at the bottom of each list. File paths are saved to disk and restored on next launch.</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 7. WebSocket Tab -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="websocket-tab">
+    <h2><span class="sec-num">7</span> The WebSocket Tab — Remote Control</h2>
+    <p>The WebSocket tab enables phone-based remote control over your local Wi-Fi network. Team members can control slides, switch scenes, and monitor lyrics from any phone or tablet — no app to install, just a web browser.</p>
+  </div>
+
+  <!-- 7.1 -->
+  <div class="section" id="connecting">
+    <h2><span class="sec-num">7.1</span> Connecting Your Phone</h2>
+    <ol class="steps">
+      <li>Click the <strong>WebSocket</strong> tab in the dock</li>
+      <li>A <strong>QR code</strong> appears on the OBS canvas (and in the tab)</li>
+      <li>Scan the QR code with your phone camera</li>
+      <li>Tap the link to open the remote web page in Safari or Chrome</li>
+      <li>Enter your PIN if required, then choose your role</li>
+    </ol>
+    <p>The remote page address is also shown as a URL (e.g. <code>http://192.168.1.x:8765</code>) — you can type this directly into any browser on the same Wi-Fi network.</p>
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div>The QR code is visible on the OBS canvas only while the WebSocket tab is active. Switch to another tab to hide it from the stream output.</div>
+    </div>
+  </div>
+
+  <!-- 7.2 -->
+  <div class="section" id="pin-auth">
+    <h2><span class="sec-num">7.2</span> PIN Authentication</h2>
+    <p>To protect access, you can set a PIN in the WebSocket settings:</p>
+    <ol class="steps">
+      <li>Click the <strong>Settings</strong> (gear icon) in the WebSocket tab</li>
+      <li>Enter a 4-digit PIN and save</li>
+    </ol>
+    <p>When a PIN is set, connecting devices will see a PIN entry screen <strong>before</strong> the role selection screen. Incorrect PIN entries are rejected immediately.</p>
+    <p>To disable PIN protection, clear the PIN field and save.</p>
+  </div>
+
+  <!-- 7.3 -->
+  <div class="section" id="manager-role">
+    <h2><span class="sec-num">7.3</span> Manager Role</h2>
+    <p>The Manager role gives full control of the OBS session from a phone. The remote interface has six tabs:</p>
+
+    <h3>Songs</h3>
+    <ul>
+      <li>Browse the full show sequence</li>
+      <li>Tap any song to expand its slides</li>
+      <li>Tap a slide to push it to OBS instantly</li>
+      <li>The currently active slide is highlighted</li>
+    </ul>
+
+    <h3>Scripture</h3>
+    <ul>
+      <li>Type a reference and verse text</li>
+      <li>Tap <strong>Apply</strong> to split into slides</li>
+      <li>Tap any slide to display it on the OBS canvas</li>
+    </ul>
+
+    <h3>Scenes</h3>
+    <ul>
+      <li>View all OBS scenes</li>
+      <li>Tap a scene to switch to it immediately</li>
+    </ul>
+
+    <h3>Media</h3>
+    <ul>
+      <li>Browse the background gallery (Lyrics + Scripture combined)</li>
+      <li>Tap any item to display it as the background behind lyrics</li>
+      <li>Tap <strong>⬛ Stop Background Media</strong> to clear</li>
+    </ul>
+
+    <h3>MV</h3>
+    <ul>
+      <li>Start/stop video and music playback</li>
+      <li>View what is currently playing</li>
+    </ul>
+
+    <h3>Controls</h3>
+    <ul>
+      <li>⬛ Blackout Lyrics</li>
+      <li>⬛ Stop Background Media</li>
+      <li>⬛ Stop MV</li>
+      <li>▶ Start / ■ Stop Stream</li>
+      <li>⏺ Start / ■ Stop Recording</li>
+    </ul>
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div>Up to 4 simultaneous WebSocket connections per IP address are supported.</div>
+    </div>
+  </div>
+
+  <!-- 7.4 -->
+  <div class="section" id="confidence-monitor">
+    <h2><span class="sec-num">7.4</span> Viewer — Confidence Monitor</h2>
+    <p>The Confidence Monitor is a read-only display that always shows the currently active slide in large text. It updates automatically whenever a new slide is pushed from OBS or another remote.</p>
+    <ul>
+      <li>Font size adjusts automatically to fill the screen</li>
+      <li>Song title and section label are shown below the lyrics</li>
+      <li>No interaction required — fully passive display</li>
+    </ul>
+    <p><strong>Ideal for:</strong> a tablet facing the worship leader or musicians at the front of the stage.</p>
+  </div>
+
+  <!-- 7.5 -->
+  <div class="section" id="score-view">
+    <h2><span class="sec-num">7.5</span> Viewer — Score View</h2>
+    <p>Score View shows the full lyrics of a selected song so the user can read ahead.</p>
+    <ul>
+      <li>Choose a song from the dropdown at the top</li>
+      <li>All sections and slides are listed in order</li>
+      <li>The currently active slide (as pushed from OBS) is highlighted automatically</li>
+      <li>Toggle <strong>Follow</strong> to have the view automatically jump to whichever song is active in OBS</li>
+      <li>Use <strong>A− / A+</strong> buttons to adjust the font size</li>
+    </ul>
+    <p><strong>Ideal for:</strong> musicians who need to see coming sections, or a prompter at the sound desk.</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 8. OBS Source -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="obs-source">
+    <h2><span class="sec-num">8</span> The OBS Source</h2>
+    <p>The <strong>Lyrics</strong> source renders all content as stacked layers, from bottom to top:</p>
+
+    <div class="layer-diagram">
+      <div class="layer-row">
+        <div class="layer-num">7</div>
+        <div class="layer-label">QR code overlay (bottom-right corner)</div>
+        <div class="layer-note">WebSocket tab active only</div>
+      </div>
+      <div class="layer-row">
+        <div class="layer-num">5–6</div>
+        <div class="layer-label">Section label (bottom-left) · Song title (bottom-right)</div>
+        <div class="layer-note">Always present</div>
+      </div>
+      <div class="layer-row">
+        <div class="layer-num">4–6</div>
+        <div class="layer-label">Pinyin · Chinese characters · English translation</div>
+        <div class="layer-note">Chinese mode only</div>
+      </div>
+      <div class="layer-row">
+        <div class="layer-num">4</div>
+        <div class="layer-label">Lyrics text — full canvas</div>
+        <div class="layer-note">English mode only</div>
+      </div>
+      <div class="layer-row">
+        <div class="layer-num">2–3</div>
+        <div class="layer-label">Scripture title (top strip) · Scripture text (main area)</div>
+        <div class="layer-note">Scripture mode only</div>
+      </div>
+      <div class="layer-row">
+        <div class="layer-num">1</div>
+        <div class="layer-label">Background image or video (with crossfade transition)</div>
+        <div class="layer-note">Always rendered</div>
+      </div>
+    </div>
+
+    <h3>Source Properties</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Setting</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>Canvas Width / Height</td><td>Match your OBS output resolution (default 1280×720)</td></tr>
+          <tr><td>Bottom bar height</td><td>Height of the section + title strip in pixels</td></tr>
+          <tr><td>Scripture title strip height</td><td>Height of the scripture reference strip</td></tr>
+          <tr><td>Scripture left/right margin</td><td>Horizontal inset for scripture text</td></tr>
+          <tr><td>Font, Size, Bold, Italic</td><td>Per text-layer font settings</td></tr>
+          <tr><td>Text Colour / Opacity</td><td>Colour and transparency of text</td></tr>
+          <tr><td>Outline</td><td>Toggle, width, and colour for text outline</td></tr>
+          <tr><td>Background</td><td>Optional coloured background behind text</td></tr>
+          <tr><td>Horizontal / Vertical Align</td><td>Text alignment within each text box</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout note">
+      <div class="callout-icon">ℹ️</div>
+      <div><strong>Chinese Interleave Layout</strong> (advanced): Adjust the Y positions and heights of the Pinyin, Chinese character strips, and English translation layers in Source Properties to fine-tune the trilingual layout for your canvas size.</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- 9. Tips -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <div class="section" id="tips">
+    <h2><span class="sec-num">9</span> Tips &amp; Best Practices</h2>
+
+    <h3>Preparing for a Service</h3>
+    <ol class="steps">
+      <li>Add all songs to the Song Library before the service</li>
+      <li>Build the Show Sequence in worship order</li>
+      <li>Set lines-per-slide to match your screen layout (4 is standard)</li>
+      <li>Pre-load background images in the Background gallery</li>
+      <li>Test the remote on at least one phone beforehand</li>
+    </ol>
+
+    <h3>During a Service</h3>
+    <ul>
+      <li>Use <kbd>←</kbd> / <kbd>→</kbd> keyboard arrows on the OBS computer for fast slide navigation</li>
+      <li>Keep the <strong>Confidence Monitor</strong> on a tablet facing the worship leader</li>
+      <li>Use <strong>■ Blank</strong> (Blackout) between songs to clear the screen cleanly</li>
+      <li>Right-click any slide card to fix a typo on the fly — changes push instantly</li>
+    </ul>
+
+    <h3>Remote Team Setup</h3>
+    <div class="role-cards">
+      <div class="role-card manager">
+        <h4>🎛️ Manager Role</h4>
+        <ul>
+          <li>Give to phone operators who need full slide control</li>
+          <li>Up to 4 connections from the same device</li>
+          <li>Can switch scenes and control streaming/recording</li>
+        </ul>
+      </div>
+      <div class="role-card viewer">
+        <h4>👁️ Viewer Role</h4>
+        <ul>
+          <li><strong>Confidence Monitor</strong> — for worship leader or musicians at the front</li>
+          <li><strong>Score View</strong> — for musicians who need to read ahead or at the sound desk</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Multilingual Worship</h3>
+    <ul>
+      <li>Use <strong>Chinese Trilingual mode</strong> per-section for bilingual songs</li>
+      <li>Use <strong>Color Preset buttons Py: 4 / 5</strong> to set a distinct colour for pinyin</li>
+      <li>Pinyin spacing (blank lines between lines) is adjustable in Source Properties</li>
+    </ul>
+
+    <h3>Network &amp; Connectivity</h3>
+    <ul>
+      <li>All devices must be on the <strong>same Wi-Fi network</strong> as the OBS computer</li>
+      <li>Default port is <strong>8765</strong> — ensure it is not blocked by a Windows Firewall rule</li>
+      <li>If the QR code doesn't scan, type the URL directly: <code>http://[OBS-IP]:8765</code></li>
+      <li>The remote page auto-reconnects if the connection drops (e.g. OBS restart)</li>
+      <li>On iPhone, keep the Safari tab in the foreground for the most reliable connection</li>
+    </ul>
+  </div>
+
+</main>
+</div>
+
+<!-- ── Footer ── -->
+<footer>
+  <div>OBS Lyrics Dock &nbsp;·&nbsp; Version 10.2.0 &nbsp;·&nbsp; Windows 10/11 x64</div>
+  <div>Built with OBS Studio Plugin SDK &amp; Qt</div>
+</footer>
+
+</body>
+</html>

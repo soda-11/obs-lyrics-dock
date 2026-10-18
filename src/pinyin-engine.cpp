@@ -23,6 +23,9 @@ namespace {
 //   穌 U+7A4C → Su    traditional 耶穌  (Unihan "su" – correct syllable but needs cap)
 //   稣 U+7A63 → Su    simplified  耶稣  (Unihan "rang" – wrong reading entirely)
 //   耶 U+8036 → Ye
+//   基 U+57FA → Ji    基督 Christ
+//   督 U+7763 → Du    基督 Christ
+//   主 U+4E3B → Zhu   Lord
 static const char *overridePinyin(uint32_t cp)
 {
     switch (cp) {
@@ -35,6 +38,9 @@ static const char *overridePinyin(uint32_t cp)
         case 0x7A4C: return "Su";   // 穌 traditional  — Unihan "su" lacks capital
         case 0x7A63: return "Su";   // 稣 simplified   — Unihan "rang" is wrong
         case 0x8036: return "Ye";
+        case 0x57FA: return "Ji";   // 基 in 基督 Christ
+        case 0x7763: return "Du";   // 督 in 基督 Christ
+        case 0x4E3B: return "Zhu";  // 主 Lord
         default:     return nullptr;
     }
 }

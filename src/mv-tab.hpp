@@ -29,12 +29,17 @@ public:
     explicit MvVideoPanel(QWidget *parent = nullptr);
     void saveState();
     void loadState();
+    void setMediaList(const QStringList &paths);
+    QStringList mediaList() const;
+    void setFadeDurationMs(int ms);
+    void setNumCols(int n);
 
 public slots:
     void stopPlayback();
 
 signals:
     void videoStarted();
+    void mediaListChanged(const QStringList &paths);
 
 private slots:
     void onAddVideo();
@@ -66,15 +71,17 @@ private:
     bool                m_sequential    = false;
     bool                m_paused        = false;
     bool                m_endHandled    = false;
+    bool                m_loopOne       = false;
     int                 m_seekCooldown  = 0;
 
     QPushButton        *m_clearBtn      = nullptr;
     QPushButton        *m_seqBtn        = nullptr;
+    QPushButton        *m_loopBtn       = nullptr;
     QWidget            *m_videoControls = nullptr;
     QToolButton        *m_playPauseBtn  = nullptr;
     QSlider            *m_scrubber      = nullptr;
     QLabel             *m_timeLbl       = nullptr;
-    QSpinBox           *m_fadeSpin      = nullptr;
+    int                 m_fadeDurationMs = 500;
     QTimer             *m_pollTimer     = nullptr;
 };
 
@@ -240,13 +247,17 @@ public:
     explicit VideoTab(QWidget *parent = nullptr);
     void saveState() { if (m_videoPanel) m_videoPanel->saveState(); }
     void loadState()  { if (m_videoPanel) m_videoPanel->loadState(); }
+    void setMediaList(const QStringList &paths) { if (m_videoPanel) m_videoPanel->setMediaList(paths); }
+    QStringList mediaList() const { return m_videoPanel ? m_videoPanel->mediaList() : QStringList(); }
+    void setFadeDurationMs(int ms);
+    void setNumCols(int n);
 
 public slots:
     void stopPlayback();
 
 signals:
-    // Emitted when a video starts — LyricsDock uses this to stop Music tab.
     void playbackStarted();
+    void mediaListChanged(const QStringList &paths);
 
 private:
     MvVideoPanel *m_videoPanel = nullptr;

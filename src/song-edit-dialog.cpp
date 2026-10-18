@@ -442,7 +442,7 @@ void SongEditDialog::syncQuickPasteFromSections()
                       ? sectionTypeLabel(sec.type) : sec.label;
         lyricsOut += "[" + lbl + "]\n" + sec.text.trimmed() + "\n\n";
         if (hasChinese)
-            pinyinOut += sec.pinyin.trimmed() + "\n\n";
+            pinyinOut += "[" + lbl + "]\n" + sec.pinyin.trimmed() + "\n\n";
     }
     m_quickPasteEdit->setPlainText(lyricsOut.trimmed());
     if (hasChinese)

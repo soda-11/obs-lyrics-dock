@@ -38,6 +38,14 @@ static const QString AUDIO_FILTER =
     "Audio Files (*.mp3 *.wav *.aac *.flac *.ogg *.m4a *.wma *.opus)";
 static const QString IMAGE_FILTER =
     "Image Files (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff *.tif)";
+static const QString MEDIA_FILTER =
+    "Media Files (*.mp4 *.mov *.avi *.mkv *.webm *.flv *.wmv *.m4v "
+    "*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff *.tif)";
+
+static bool isVideoExt(const QString &path) {
+    static const QStringList v = {"mp4","mov","avi","mkv","webm","flv","wmv","m4v"};
+    return v.contains(QFileInfo(path).suffix().toLower());
+}
 
 // ══════════════════════════════════════════════════════════════
 // MvVideoPanel  (identical to v1.0)
@@ -61,7 +69,7 @@ void MvVideoPanel::buildUi()
     auto *topL = new QHBoxLayout(topBar);
     topL->setContentsMargins(6, 4, 6, 4);
 
-    auto *addBtn = new QPushButton("+ Add Videos");
+    auto *addBtn = new QPushButton("+ Add Media");
     addBtn->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
 
     m_seqBtn = new QPushButton("Sequential: Off");
@@ -128,29 +136,27 @@ void MvVideoPanel::buildUi()
     m_timeLbl->setStyleSheet("color:#888;font-size:9px;");
     m_timeLbl->setFixedWidth(76);
 
+    m_loopBtn = new QPushButton(QString::fromUtf8("↺"));
+    m_loopBtn->setFixedSize(26, 22);
+    m_loopBtn->setToolTip("Loop: Off — click to enable loop");
+    m_loopBtn->setCheckable(true);
+    m_loopBtn->setStyleSheet(
+        "QPushButton{background:#2a2a2a;color:#666;border:1px solid #444;"
+        "border-radius:3px;font-size:13px;font-weight:bold;}"
+        "QPushButton:checked{background:#1a3a1a;color:#3dd68c;border:1px solid #2a8a2a;}"
+        "QPushButton:hover{border-color:#888;}");
+    connect(m_loopBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_loopOne = on;
+        m_loopBtn->setToolTip(on ? "Loop: On — click to disable" : "Loop: Off — click to enable loop");
+    });
+
     scrubRow->addWidget(m_playPauseBtn);
     scrubRow->addWidget(m_scrubber, 1);
     scrubRow->addWidget(m_timeLbl);
+    scrubRow->addWidget(m_loopBtn);
     vcL->addLayout(scrubRow);
     m_videoControls->setVisible(false);
     root->addWidget(m_videoControls);
-
-    auto *fadeBar = new QWidget;
-    fadeBar->setStyleSheet("background:#1e1e1e;border-top:1px solid #333;");
-    auto *fadeL = new QHBoxLayout(fadeBar);
-    fadeL->setContentsMargins(8, 4, 8, 4);
-    auto *fadeLbl = new QLabel("Fade:");
-    fadeLbl->setStyleSheet("color:#aaa;font-size:9px;");
-    m_fadeSpin = new QSpinBox;
-    m_fadeSpin->setRange(0, 3000);
-    m_fadeSpin->setSingleStep(50);
-    m_fadeSpin->setValue(500);
-    m_fadeSpin->setSuffix(" ms");
-    m_fadeSpin->setFixedWidth(90);
-    fadeL->addWidget(fadeLbl);
-    fadeL->addWidget(m_fadeSpin);
-    fadeL->addStretch();
-    root->addWidget(fadeBar);
 
     m_pollTimer = new QTimer(this);
     m_pollTimer->setInterval(300);
@@ -230,20 +236,21 @@ void MvVideoPanel::playVideoAt(int index)
     m_endHandled = false;
     m_paused     = false;
     updateVideoControls();
-    lyrics_renderer_mv_video_push(m_items[index].path, m_fadeSpin->value());
+    lyrics_renderer_mv_video_push(m_items[index].path, m_fadeDurationMs);
     emit videoStarted();
 }
 
 void MvVideoPanel::onAddVideo()
 {
-    QStringList files = QFileDialog::getOpenFileNames(this, "Add Videos", QString(), VIDEO_FILTER);
+    QStringList files = QFileDialog::getOpenFileNames(this, "Add Media", QString(), MEDIA_FILTER);
     if (files.isEmpty()) return;
     for (const auto &f : files) {
-        MediaItem item; item.path = f; item.isVideo = true;
+        MediaItem item; item.path = f; item.isVideo = isVideoExt(f);
         m_items << item;
     }
     rebuildGrid();
     saveState();
+    emit mediaListChanged(mediaList());
 }
 
 void MvVideoPanel::onCardClicked(int index) { playVideoAt(index); saveState(); }
@@ -256,13 +263,14 @@ void MvVideoPanel::onCardRemoveRequested(int index)
     m_items.removeAt(index);
     rebuildGrid();
     saveState();
+    emit mediaListChanged(mediaList());
 }
 
 void MvVideoPanel::onClearVideo()
 {
     setActiveCard(-1);
     m_videoControls->setVisible(false);
-    lyrics_renderer_mv_clear(m_fadeSpin->value());
+    lyrics_renderer_mv_clear(m_fadeDurationMs);
 }
 
 void MvVideoPanel::onSequentialToggle(bool checked)
@@ -296,7 +304,9 @@ void MvVideoPanel::onPollTimer()
     if (m_seekCooldown > 0) { --m_seekCooldown; return; }
     if (lyrics_renderer_mv_get_state() != kMediaStateEnded) return;
     m_endHandled = true;
-    if (m_sequential) {
+    if (m_loopOne) {
+        playVideoAt(m_activeIndex);
+    } else if (m_sequential) {
         int next = m_activeIndex + 1;
         if (next < m_items.size()) playVideoAt(next);
         else { setActiveCard(-1); m_videoControls->setVisible(false); lyrics_renderer_mv_clear(); }
@@ -313,6 +323,28 @@ void MvVideoPanel::stopPlayback()
     m_endHandled = true;
 }
 
+void MvVideoPanel::setMediaList(const QStringList &paths)
+{
+    if (m_activeIndex >= 0) { stopPlayback(); lyrics_renderer_mv_clear(); }
+    m_items.clear();
+    for (const auto &p : paths) {
+        if (!QFile::exists(p)) continue;
+        MediaItem item; item.path = p; item.isVideo = isVideoExt(p);
+        m_items << item;
+    }
+    rebuildGrid();
+}
+
+QStringList MvVideoPanel::mediaList() const
+{
+    QStringList out;
+    for (const auto &it : m_items) out << it.path;
+    return out;
+}
+
+void MvVideoPanel::setFadeDurationMs(int ms) { m_fadeDurationMs = ms; }
+void MvVideoPanel::setNumCols(int n) { if (n < 1 || n > 8) return; m_currentCols = n; rebuildGrid(); }
+
 QString MvVideoPanel::statePath() const
 {
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
@@ -327,7 +359,6 @@ void MvVideoPanel::saveState()
     for (const auto &item : m_items) arr.append(item.path);
     QJsonObject obj;
     obj["items"]      = arr;
-    obj["fadeMs"]     = m_fadeSpin->value();
     obj["sequential"] = m_sequential;
     QFile f(statePath());
     if (f.open(QIODevice::WriteOnly)) f.write(QJsonDocument(obj).toJson());
@@ -344,10 +375,9 @@ void MvVideoPanel::loadState()
     for (const auto &v : obj["items"].toArray()) {
         QString path = v.toString();
         if (!QFile::exists(path)) continue;
-        MediaItem item; item.path = path; item.isVideo = true;
+        MediaItem item; item.path = path; item.isVideo = isVideoExt(path);
         m_items << item;
     }
-    if (obj.contains("fadeMs")) m_fadeSpin->setValue(obj["fadeMs"].toInt());
     m_seqBtn->setChecked(obj["sequential"].toBool(false));
     rebuildGrid();
 }
@@ -1248,6 +1278,9 @@ VideoTab::VideoTab(QWidget *parent) : QWidget(parent)
     connect(m_videoPanel, &MvVideoPanel::videoStarted, this, [this](){
         emit playbackStarted();
     });
+    connect(m_videoPanel, &MvVideoPanel::mediaListChanged, this, [this](const QStringList &p){
+        emit mediaListChanged(p);
+    });
 }
 
 void VideoTab::stopPlayback()
@@ -1258,6 +1291,9 @@ void VideoTab::stopPlayback()
     // starts would kill music that was just pushed.
     if (m_videoPanel) m_videoPanel->stopPlayback();
 }
+
+void VideoTab::setFadeDurationMs(int ms) { if (m_videoPanel) m_videoPanel->setFadeDurationMs(ms); }
+void VideoTab::setNumCols(int n) { if (m_videoPanel) m_videoPanel->setNumCols(n); }
 
 // ══════════════════════════════════════════════════════════════
 // MusicTab

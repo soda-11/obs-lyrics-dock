@@ -23,8 +23,10 @@ set(PLUGIN_SOURCES
     src/lyrics-renderer.cpp      src/lyrics-renderer.hpp
     src/media-gallery.cpp        src/media-gallery.hpp
     src/mv-tab.cpp               src/mv-tab.hpp
-    src/scripture-tab.cpp        src/scripture-tab.hpp
-    src/call-to-worship-tab.cpp  src/call-to-worship-tab.hpp
+    src/ppt-tab.cpp              src/ppt-tab.hpp
+    src/overlay-tab.cpp          src/overlay-tab.hpp
+    src/preview-window.cpp       src/preview-window.hpp
+    src/layout-dialog.cpp        src/layout-dialog.hpp
     src/color-preset-button.cpp  src/color-preset-button.hpp
     src/websocket-server.cpp     src/websocket-server.hpp
     src/settings-dialog.cpp      src/settings-dialog.hpp
@@ -32,6 +34,7 @@ set(PLUGIN_SOURCES
     src/pinyin-engine.cpp        src/pinyin-engine.hpp
                                  src/pinyin-table.hpp
                                  src/qrcodegen.hpp
+    src/audio-bin.cpp             src/audio-bin.hpp
 )
 
 add_library(obs-lyrics-dock MODULE ${PLUGIN_SOURCES})
@@ -40,11 +43,13 @@ set_target_properties(obs-lyrics-dock PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC O
 if(QT_VERSION EQUAL 6)
     target_link_libraries(obs-lyrics-dock PRIVATE
         OBS::libobs OBS::obs-frontend-api
-        Qt6::Core Qt6::Widgets Qt6::Network)
+        Qt6::Core Qt6::Widgets Qt6::Network
+        ole32 oleaut32)
 else()
     target_link_libraries(obs-lyrics-dock PRIVATE
         libobs obs-frontend-api
-        Qt5::Core Qt5::Widgets Qt5::Network)
+        Qt5::Core Qt5::Widgets Qt5::Network
+        ole32 oleaut32)
 endif()
 
 target_include_directories(obs-lyrics-dock PRIVATE
@@ -58,4 +63,4 @@ if(WIN32)
         DESTINATION "data/obs-plugins/obs-lyrics-dock")
 endif()
 
-message(STATUS "obs-lyrics-dock v10.1.0 configured")
+message(STATUS "obs-lyrics-dock v12.7.0 configured")
