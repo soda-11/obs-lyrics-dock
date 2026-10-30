@@ -261,7 +261,6 @@ private:
     QPushButton        *m_removeItemBtn    = nullptr;
     QPushButton        *m_itemUpBtn        = nullptr;
     QPushButton        *m_itemDownBtn      = nullptr;
-    QPushButton        *m_importWebBtn     = nullptr;
 
     // ── Song slides ───────────────────────────────────────────
     QScrollArea        *m_slideArea        = nullptr;
@@ -280,8 +279,7 @@ private:
     QToolButton        *m_zoomOutBtn        = nullptr;
     QSlider            *m_zoomSlider        = nullptr;
     QLabel             *m_zoomLabel         = nullptr;
-    QFontComboBox      *m_slideFontCombo    = nullptr;
-    QString             m_slideFontFamily   = "Arial";
+    QString             m_slideFontFamily   = "Calibri";
     QSlider            *m_cardWidthSlider   = nullptr;
     QLabel             *m_cardWidthLabel    = nullptr;
     QToolButton        *m_cardWidthOutBtn   = nullptr;

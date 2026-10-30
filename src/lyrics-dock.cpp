@@ -1395,11 +1395,8 @@ void LyricsDock::loadState()
                     QColor((fc >> 16) & 0xFF, (fc >> 8) & 0xFF, fc & 0xFF),
                     QColor((oc >> 16) & 0xFF, (oc >> 8) & 0xFF, oc & 0xFF));
             }
-            QString sf = doc.object()["slideFont"].toString("Arial");
-            if (!sf.isEmpty()) {
-                m_slideFontFamily = sf;
-                if (m_slideFontCombo) { QSignalBlocker b(m_slideFontCombo); m_slideFontCombo->setCurrentFont(QFont(sf)); }
-            }
+            QString sf = doc.object()["slideFont"].toString("Calibri");
+            if (!sf.isEmpty()) m_slideFontFamily = sf;
             int cpr = qBound(1, doc.object()["cardsPerRow"].toInt(3), 5);
             // migrate old percentage-based saves (values > 5 are old % / 10)
             if (doc.object().contains("cardWidthScale") && !doc.object().contains("cardsPerRow")) {
@@ -1774,14 +1771,12 @@ void LyricsDock::buildUi()
     m_removeItemBtn = new QPushButton(QString::fromUtf8("\u2212"));
     m_itemUpBtn     = new QPushButton(QString::fromUtf8("\u25B2"));
     m_itemDownBtn   = new QPushButton(QString::fromUtf8("\u25BC"));
-    m_importWebBtn  = new QPushButton(QString::fromUtf8("\u2B06 Import"));
     for (auto *b : {m_addItemBtn, m_removeItemBtn, m_itemUpBtn, m_itemDownBtn})
         b->setFixedSize(28, 28);
     m_addItemBtn->setToolTip("Add service item");
     m_removeItemBtn->setToolTip("Remove selected item");
     m_itemUpBtn->setToolTip("Move up");
     m_itemDownBtn->setToolTip("Move down");
-    m_importWebBtn->setToolTip("Import service from web editor JSON");
     m_removeItemBtn->setEnabled(false);
     m_itemUpBtn->setEnabled(false);
     m_itemDownBtn->setEnabled(false);
@@ -1790,7 +1785,6 @@ void LyricsDock::buildUi()
     svcBtnRow->addWidget(m_itemUpBtn);
     svcBtnRow->addWidget(m_itemDownBtn);
     svcBtnRow->addStretch();
-    svcBtnRow->addWidget(m_importWebBtn);
 
     // ── Global Fade row ───────────────────────────────────────────
     auto *fadeRowW = new QWidget;
@@ -1890,7 +1884,7 @@ void LyricsDock::buildUi()
     centerL->addWidget(m_contentStack, 1);
     centerL->addWidget(m_slideCtrlRow);
 
-    // ════ RIGHT — Media Bin ══════════════════════════════════
+    // ════ RIGHT — Graphics Bin ═══════════════════════════════
     auto *rightPanel = new QWidget;
     rightPanel->setMinimumWidth(200);
     rightPanel->setMaximumWidth(380);
@@ -1942,8 +1936,8 @@ void LyricsDock::buildUi()
 
     connect(m_editSlideApplyBtn, &QPushButton::clicked, this, &LyricsDock::onEditSlideApply);
 
-    // ── Media Bin (top half) ──────────────────────────────────
-    auto *binHdr = new QLabel("MEDIA BIN");
+    // ── Graphics Bin (top half) ───────────────────────────────
+    auto *binHdr = new QLabel("GRAPHICS BIN");
     binHdr->setStyleSheet("color:#6b6b7b;font-size:9px;font-weight:bold;letter-spacing:1px;");
     rightL->addWidget(binHdr);
     m_sharedGallery = new MediaGallery(rightPanel, "shared-gallery.json");
@@ -1991,7 +1985,6 @@ void LyricsDock::buildUi()
     connect(m_removeItemBtn, &QPushButton::clicked, this, &LyricsDock::onRemoveServiceItem);
     connect(m_itemUpBtn,     &QPushButton::clicked, this, &LyricsDock::onServiceItemUp);
     connect(m_itemDownBtn,   &QPushButton::clicked, this, &LyricsDock::onServiceItemDown);
-    connect(m_importWebBtn,  &QPushButton::clicked, this, &LyricsDock::onImportFromWeb);
 
     // ── Cross-panel media coordination ───────────────────────
     connect(m_sharedGallery, &MediaGallery::mediaActivated, this, [this](){
@@ -2169,21 +2162,15 @@ QWidget *LyricsDock::buildSongPanel()
     m_nextBtn->setToolTip("Next slide (Right arrow)");
     m_zoomOutBtn = new QToolButton; m_zoomOutBtn->setText("-"); m_zoomOutBtn->setToolTip("Zoom out");
     m_zoomSlider = new QSlider(Qt::Horizontal);
-    m_zoomSlider->setRange(1, 8); m_zoomSlider->setValue(4); m_zoomSlider->setFixedWidth(80);
+    m_zoomSlider->setRange(1, 8); m_zoomSlider->setValue(4); m_zoomSlider->setMaximumWidth(80);
     m_zoomInBtn  = new QToolButton; m_zoomInBtn->setText("+");  m_zoomInBtn->setToolTip("Zoom in");
     m_zoomLabel  = new QLabel("100%"); m_zoomLabel->setFixedWidth(38);
     m_zoomLabel->setStyleSheet("color:#888;font-size:9px;");
 
-    auto *fontLbl = new QLabel("Font:"); fontLbl->setStyleSheet("color:#888;font-size:9px;");
-    m_slideFontCombo = new QFontComboBox;
-    m_slideFontCombo->setCurrentFont(QFont("Arial"));
-    m_slideFontCombo->setFixedWidth(130); m_slideFontCombo->setFixedHeight(22);
-    m_slideFontCombo->setEditable(false);
-
     auto *wLbl = new QLabel("Cols:"); wLbl->setStyleSheet("color:#888;font-size:9px;");
     m_cardWidthOutBtn = new QToolButton; m_cardWidthOutBtn->setText("-");
     m_cardWidthSlider = new QSlider(Qt::Horizontal);
-    m_cardWidthSlider->setRange(1, 5); m_cardWidthSlider->setValue(3); m_cardWidthSlider->setFixedWidth(80);
+    m_cardWidthSlider->setRange(1, 5); m_cardWidthSlider->setValue(3); m_cardWidthSlider->setMaximumWidth(80);
     m_cardWidthInBtn  = new QToolButton; m_cardWidthInBtn->setText("+");
     m_cardWidthLabel  = new QLabel("3"); m_cardWidthLabel->setFixedWidth(24);
     m_cardWidthLabel->setStyleSheet("color:#888;font-size:9px;");
@@ -2196,8 +2183,6 @@ QWidget *LyricsDock::buildSongPanel()
     ctrlL->addSpacing(4);
     ctrlL->addWidget(wLbl); ctrlL->addWidget(m_cardWidthOutBtn); ctrlL->addWidget(m_cardWidthSlider);
     ctrlL->addWidget(m_cardWidthInBtn); ctrlL->addWidget(m_cardWidthLabel);
-    ctrlL->addSpacing(6);
-    ctrlL->addWidget(fontLbl); ctrlL->addWidget(m_slideFontCombo);
     // ctrlBar (m_slideCtrlRow) is NOT added here — it is added to centerL in buildUi()
 
     // Connections for song panel controls
@@ -2227,9 +2212,6 @@ QWidget *LyricsDock::buildSongPanel()
     connect(m_zoomInBtn,  &QToolButton::clicked, this, &LyricsDock::onZoomIn);
     connect(m_zoomOutBtn, &QToolButton::clicked, this, &LyricsDock::onZoomOut);
     connect(m_zoomSlider, &QSlider::valueChanged, this, &LyricsDock::onZoomSlider);
-    connect(m_slideFontCombo, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) {
-        m_slideFontFamily = f.family(); applyZoomToAll(); saveState();
-    });
     connect(m_cardWidthSlider, &QSlider::valueChanged, this, [this](int v) {
         m_cardWidthScale = v;
         m_cardWidthLabel->setText(QString::number(v));
