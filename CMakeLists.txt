@@ -63,4 +63,4 @@ if(WIN32)
         DESTINATION "data/obs-plugins/obs-lyrics-dock")
 endif()
 
-message(STATUS "obs-lyrics-dock v12.7.0 configured")
+message(STATUS "obs-lyrics-dock v12.8.0 configured")

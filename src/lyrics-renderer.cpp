@@ -853,10 +853,8 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"canvas_w",      "Width (px)",                       320,7680,1);
     obs_properties_add_int(cgrp,"canvas_h",      "Height (px)",                      180,4320,1);
     obs_properties_add_int(cgrp,"bottom_bar_h",  "Lyrics: bottom bar height (px)",    10, 400,1);
-    obs_properties_add_int(cgrp,"scrip_title_h", "Scripture: title strip height (px)", 10, 400,1);
-    obs_properties_add_int(cgrp,"scrip_h_margin","Scripture: left/right margin (px)",   0, 400,1);
-    obs_properties_add_int(cgrp,"ctw_title_h",  "CTW: title strip height (px)",        10, 400,1);
-    obs_properties_add_int(cgrp,"ctw_h_margin", "CTW: left/right margin (px)",          0, 400,1);
+    obs_properties_add_int(cgrp,"ctw_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
+    obs_properties_add_int(cgrp,"ctw_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
 
     // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
@@ -887,19 +885,17 @@ static obs_properties_t *src_props(void *)
         "    4. English translation (lower strip)\n"
         "    5. Section label (bottom-left)\n"
         "    6. Song title   (bottom-right)\n"
-        "  Scripture mode:\n"
-        "    2. Scripture title (top strip)\n"
-        "    3. Scripture text  (main area below title)",
+        "  Paragraph mode:\n"
+        "    2. Paragraph title (top strip)\n"
+        "    3. Paragraph text  (main area below title)",
         OBS_TEXT_INFO);
     obs_properties_add_group(props,"canvas_grp",
         "Canvas & Layout",OBS_GROUP_NORMAL,cgrp);
     addBoxGroup(props,"lyrics_", "1.  English Lyrics — Main Text");
     addBoxGroup(props,"section_","2.  Lyrics — Section Label  (bottom-left)");
     addBoxGroup(props,"title_",  "3.  Lyrics — Song Title  (bottom-right)");
-    addBoxGroup(props,"ctw_title_","4.  Call to Worship — Title  (top strip)");
-    addBoxGroup(props,"ctw_text_", "5.  Call to Worship — Text  (main area)");
-    addBoxGroup(props,"scr_title_","6.  Scripture — Title  (top strip)");
-    addBoxGroup(props,"scr_text_", "7.  Scripture — Text  (main area)");
+    addBoxGroup(props,"ctw_title_","4.  Paragraph — Title  (top strip)");
+    addBoxGroup(props,"ctw_text_", "5.  Paragraph — Text  (main area)");
     addBoxGroup(props,"ch_pinyin_", "6.  Chinese — Pinyin  (top strip)");
     addBoxGroup(props,"ch_chinese_","7.  Chinese — Characters  (middle)");
     addBoxGroup(props,"ch_english_","8.  Chinese — English Translation  (bottom)");
