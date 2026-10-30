@@ -1,4 +1,4 @@
-// layout-dialog.cpp — per-tab font/layout settings dialog
+﻿// layout-dialog.cpp — per-tab font/layout settings dialog
 #include "layout-dialog.hpp"
 #include "lyrics-renderer.hpp"
 
@@ -60,7 +60,7 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
     : QDialog(parent), m_tab(tabName)
 {
     QString title = (tabName == "lyrics") ? "Lyrics Layout"
-                  : (tabName == "ctw")    ? "Call to Worship Layout"
+                  : (tabName == "paragraph")    ? "Call to Worship Layout"
                                           : "Scripture Layout";
     setWindowTitle(title);
     setWindowFlags(Qt::Dialog | Qt::Tool);
@@ -138,11 +138,11 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
         }
     } else {
         m_rows.resize(2);
-        if (tabName == "ctw") {
-            m_rows[0].prefix = "ctw_title_";
-            m_rows[1].prefix = "ctw_text_";
-            m_titleHKey  = "ctw_title_h";
-            m_hMarginKey = "ctw_h_margin";
+        if (tabName == "paragraph") {
+            m_rows[0].prefix = "paragraph_title_";
+            m_rows[1].prefix = "paragraph_text_";
+            m_titleHKey  = "paragraph_title_h";
+            m_hMarginKey = "paragraph_h_margin";
         } else {
             m_rows[0].prefix = "scr_title_";
             m_rows[1].prefix = "scr_text_";

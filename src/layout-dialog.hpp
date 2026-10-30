@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // layout-dialog.hpp — per-tab font/layout settings dialog
 
 #include <QDialog>
@@ -14,7 +14,7 @@ class QFontComboBox;
 class LayoutDialog : public QDialog {
     Q_OBJECT
 public:
-    // tabName: "lyrics" | "ctw" | "scripture"
+    // tabName: "lyrics" | "paragraph" | "scripture"
     explicit LayoutDialog(const QString &tabName, QWidget *parent = nullptr);
 
 private slots:

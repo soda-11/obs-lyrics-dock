@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -247,7 +247,7 @@ body{
 .sCardSect{font-size:11px;font-weight:700;color:#000;flex:1;
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 
-/* ── CTW / Scripture shared editor ───────────────────────── */
+/* ── Paragraph / Scripture shared editor ───────────────────────── */
 .editorBlock{background:var(--bg2);border:1px solid var(--border);
   border-radius:8px;margin-bottom:6px;overflow:hidden;}
 .editorHdr{display:flex;align-items:center;justify-content:space-between;
@@ -753,15 +753,15 @@ var ws=null, myRole=null, viewerMode=null;
 var currentScene=null, currentSlide=-1, currentMedia=null;
 var isStreaming=false, isRecording=false;
 var songData=[], sceneList=[], reconnTimer=null;
-var lyricsMediaData=[], ctwMediaData=[], scriptureMediaData=[];
+var lyricsMediaData=[], paragraphMediaData=[], scriptureMediaData=[];
 var scoreFontSize=15, scoreFollowMode=false;
 var mvVideoData=[], mvMusicData=[], mvMode='', mvPath='';
 var audioBinFiles=[], audioBinActive=-1, audioBinPlaying=false;
 var needPin=false;
 var scripSlides=[], scripActiveSlide=-1;
-var ctwSlides=[],   ctwActiveSlide=-1;
+var paragraphSlides=[],   paragraphActiveSlide=-1;
 var colorPresets=[], activeColorPreset=-1;
-var activeTabName='ctw';
+var activeTabName='paragraph';
 var pptCurrent=0,   pptTotal=0;
 // Zoom (local — no WS)
 var slideZoomLevel=1; // 0=2col/12px 1=2col/15px 2=1col/18px 3=1col/22px 4=1col/26px
@@ -1029,7 +1029,7 @@ function handleMsg(msg){
       sceneList=msg.scenes||[]; currentScene=msg.currentScene; renderScenesRow(); break;
     case 'mediaList':
       {var t=msg.tab||'lyrics',items=msg.items||[];
-       if(t==='ctw') ctwMediaData=items;
+       if(t==='paragraph') paragraphMediaData=items;
        else if(t==='scripture') scriptureMediaData=items;
        else lyricsMediaData=items;
        preCaptureVideos(items);
@@ -1073,13 +1073,13 @@ function handleMsg(msg){
       activeColorPreset=(msg.active!=null)?msg.active:-1;
       renderColorPresets();
       break;
-    case 'ctwState':
-      {var cti=document.getElementById('ctwTitleInput');
-       var ctx=document.getElementById('ctwTextInput');
+    case 'paragraphState':
+      {var cti=document.getElementById('paragraphTitleInput');
+       var ctx=document.getElementById('paragraphTextInput');
        if(cti) cti.value=msg.title||'';
        if(ctx) ctx.value=msg.text||'';
-       ctwSlides=parseSlides(msg.text||'');
-       ctwActiveSlide=-1; renderCTWGrid();}
+       paragraphSlides=parseSlides(msg.text||'');
+       paragraphActiveSlide=-1; renderParagraphGrid();}
       break;
     case 'preview':
       updatePreview(msg.data);
@@ -1093,7 +1093,7 @@ function handleMsg(msg){
     case 'lpActiveMode':
       if(myRole==='lp'){
         lpCurrentMode = msg.mode||'lyr';
-        if(msg.mode==='ctw')      lpSetActiveBtn('lpCtw');
+        if(msg.mode==='paragraph')      lpSetActiveBtn('lpParagraph');
         else if(msg.mode==='scr') lpSetActiveBtn('lpScr');
         else                      lpSetActiveBtn(null);
       }
@@ -1820,7 +1820,7 @@ function selectPresSource(type){
 var lpActivePres = -1;
 var lpCurrentMode = 'lyr';
 function lpSetActiveBtn(id){
-  ['lpPres0','lpPres1','lpPres2','lpCtw','lpScr'].forEach(function(bid){
+  ['lpPres0','lpPres1','lpPres2','lpParagraph','lpScr'].forEach(function(bid){
     var el=document.getElementById(bid);
     if(el) el.classList.toggle('active', bid===id);
   });
@@ -1860,24 +1860,24 @@ function onVolChange(v){
 }
 
 // ── Call to Worship ───────────────────────────────────────────
-function applyCTW(){
-  var title=(document.getElementById('ctwTitleInput')||{}).value||'';
-  var text=(document.getElementById('ctwTextInput')||{}).value||'';
-  ctwSlides=parseSlides(text); ctwActiveSlide=-1; renderCTWGrid();
-  send({type:'applyCTW',title:title,text:text});
+function applyParagraph(){
+  var title=(document.getElementById('paragraphTitleInput')||{}).value||'';
+  var text=(document.getElementById('paragraphTextInput')||{}).value||'';
+  paragraphSlides=parseSlides(text); paragraphActiveSlide=-1; renderParagraphGrid();
+  send({type:'applyParagraph',title:title,text:text});
 }
-function clearCTW(){
-  ctwActiveSlide=-1; ctwSlides=[]; renderCTWGrid();
-  send({type:'clearCTW'});
+function clearParagraph(){
+  paragraphActiveSlide=-1; paragraphSlides=[]; renderParagraphGrid();
+  send({type:'clearParagraph'});
 }
-function renderCTWGrid(){
-  var el=document.getElementById('ctwSlideGrid');
+function renderParagraphGrid(){
+  var el=document.getElementById('paragraphSlideGrid');
   if(!el) return;
-  if(!ctwSlides.length){
+  if(!paragraphSlides.length){
     el.innerHTML='<div class="emptyState">Press Apply to generate slides</div>';return;
   }
-  el.innerHTML='<div class="slideGrid">'+ctwSlides.map(function(sl,i){
-    return '<div class="sCard'+(i===ctwActiveSlide?' active':'')+'" onclick="pushCTWSlide('+i+')">'
+  el.innerHTML='<div class="slideGrid">'+paragraphSlides.map(function(sl,i){
+    return '<div class="sCard'+(i===paragraphActiveSlide?' active':'')+'" onclick="pushParagraphSlide('+i+')">'
       +'<div class="sCardFoot" style="background:#2a2a2a">'
       +'<span class="sCardNum">'+(i+1)+'</span>'
       +'<span class="sCardSect" style="color:#ccc">Slide '+(i+1)+'</span>'
@@ -1887,11 +1887,11 @@ function renderCTWGrid(){
   }).join('')+'</div>';
   applySlideZoom();
 }
-function pushCTWSlide(idx){
-  if(idx<0||idx>=ctwSlides.length) return;
-  var title=(document.getElementById('ctwTitleInput')||{}).value||'';
-  ctwActiveSlide=idx; renderCTWGrid();
-  send({type:'pushCTWSlide',title:title,text:ctwSlides[idx]});
+function pushParagraphSlide(idx){
+  if(idx<0||idx>=paragraphSlides.length) return;
+  var title=(document.getElementById('paragraphTitleInput')||{}).value||'';
+  paragraphActiveSlide=idx; renderParagraphGrid();
+  send({type:'pushParagraphSlide',title:title,text:paragraphSlides[idx]});
 }
 
 // ── Scripture ─────────────────────────────────────────────────

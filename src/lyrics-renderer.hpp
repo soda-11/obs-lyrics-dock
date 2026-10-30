@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // lyrics-renderer.hpp  v10.0
 
 #include <obs-module.h>
@@ -40,9 +40,9 @@ void lyrics_renderer_scripture_clear();
 // ── Call to Worship Tab API ────────────────────────────────────
 // Identical to Scripture API but uses independent ctw_title_ / ctw_text_
 // font/layout settings so each tab can have its own look.
-void lyrics_renderer_ctw_push(const QString &title, const QString &text);
-void lyrics_renderer_ctw_clear();
-void lyrics_renderer_set_ctw_text_color(uint32_t fontColor, uint32_t outlineColor);
+void lyrics_renderer_paragraph_push(const QString &title, const QString &text);
+void lyrics_renderer_paragraph_clear();
+void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor);
 
 // ── Settings access (used by LayoutDialog) ─────────────────────
 // Returns the first active OBS source instance, or nullptr if none.

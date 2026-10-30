@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // lyrics-dock.hpp  v12.0
 class LayoutDialog;
 
@@ -171,15 +171,15 @@ public:
     void pptPrev();
     void pptGoto(int slide);
     void pptGetState();
-    void applyCTWFromRemote(const QString &title, const QString &text);
-    void pushCTWSlideFromRemote(const QString &title, const QString &text);
+    void applyParagraphFromRemote(const QString &title, const QString &text);
+    void pushParagraphSlideFromRemote(const QString &title, const QString &text);
     void applyColorPresetFromRemote(int idx);
     void audioBinPlayFromRemote(int index);
     void audioBinStopFromRemote();
     void applyParagraphsFromRemote(const QString &title, const QString &text);
     void presentationShowFromRemote(int type);
     QJsonArray colorPresetsJson() const;
-    void pushCTWCurrent();
+    void pushParagraphCurrent();
     void pushScriptureCurrent();
     void restoreCurrentTabContent();
     Q_INVOKABLE void activateNextSlide();

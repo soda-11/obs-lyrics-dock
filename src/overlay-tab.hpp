@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // overlay-tab.hpp  v1.3
 // Floating touch overlay (mode bar + Prev/Next) and its settings tab.
 
@@ -27,7 +27,7 @@ public:
 
     void    setOverlaySize(int totalWidthPx);
     void    setOverlayOpacity(int percent);      // 20–100
-    void    setActiveMode(const QString &mode);  // "ctw"|"scr"|"lyr"
+    void    setActiveMode(const QString &mode);  // "paragraph"|"scr"|"lyr"
     void    setPresActive(int type);             // 0/1/2=active pres, -1=none
     void    setPresEnabled(int type, bool on);   // enable/disable a pres button
     void    setHue(int hue);                     // 0–359
@@ -121,7 +121,7 @@ private:
     void populateSceneCombos();
     void populateMonitorCombos();
     void switchToSceneForMode(const QString &mode);
-    int  modeIndex(const QString &mode) const; // "ppt"→0, "ctw"→1, "scr"→2, "lyr"→3
+    int  modeIndex(const QString &mode) const; // "ppt"→0, "paragraph"→1, "scr"→2, "lyr"→3
     void saveSettings();
     void loadSettings();
 

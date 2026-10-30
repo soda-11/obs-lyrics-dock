@@ -1,4 +1,4 @@
-// lyrics-dock.cpp  v12.0
+﻿// lyrics-dock.cpp  v12.0
 #include "lyrics-dock.hpp"
 #include "audio-bin.hpp"
 #include "layout-dialog.hpp"
@@ -1241,9 +1241,9 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
             m_currentBgPath = bgPath;
         }
         // Push text through CTW renderer
-        lyrics_renderer_ctw_push(item.title, slides[slideIdx]);
+        lyrics_renderer_paragraph_push(item.title, slides[slideIdx]);
         if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[slideIdx]);
-        if (m_wsServer) m_wsServer->broadcastActiveMode("ctw");
+        if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
         break;
     }
     case ServiceItem::Type::Lyrics: {
@@ -1285,7 +1285,7 @@ void LyricsDock::applyScriptureFromRemote(const QString &title, const QString &t
 
 void LyricsDock::applyParagraphsFromRemote(const QString &title, const QString &text)
 {
-    lyrics_renderer_ctw_push(title, text);
+    lyrics_renderer_paragraph_push(title, text);
     if (m_wsServer) m_wsServer->broadcastCtwState(title, text);
 }
 
@@ -1303,7 +1303,7 @@ void LyricsDock::stopAllMedia()
 void LyricsDock::pptNext()  { if (m_pptTab) m_pptTab->nextSlide(); }
 void LyricsDock::pptPrev()  { if (m_pptTab) m_pptTab->prevSlide(); }
 
-void LyricsDock::pushCTWCurrent()
+void LyricsDock::pushParagraphCurrent()
 {
     if (m_activeSlide >= 0) pushCurrentSlide();
 }
@@ -1339,12 +1339,12 @@ void LyricsDock::pptGetState()
                                    m_pptTab->presTitle());
 }
 
-void LyricsDock::applyCTWFromRemote(const QString &title, const QString &text)
+void LyricsDock::applyParagraphFromRemote(const QString &title, const QString &text)
 {
     applyParagraphsFromRemote(title, text);
 }
 
-void LyricsDock::pushCTWSlideFromRemote(const QString &title, const QString &text)
+void LyricsDock::pushParagraphSlideFromRemote(const QString &title, const QString &text)
 {
     lyrics_renderer_scripture_push(title, text);
     if (m_wsServer) m_wsServer->broadcastScripture(title, text);
@@ -1466,7 +1466,7 @@ ServiceItem ServiceItem::fromJson(const QJsonObject &obj)
     const QString t = obj["type"].toString();
     // Legacy types mapped to new types
     if      (t == "paragraphs")  item.type = Type::Paragraphs;
-    else if (t == "ctw")         item.type = Type::Paragraphs;
+    else if (t == "paragraph")         item.type = Type::Paragraphs;
     else if (t == "scripture")   item.type = Type::Paragraphs;
     else if (t == "media")       item.type = Type::Media;
     else if (t == "video")       item.type = Type::Media;
@@ -2037,7 +2037,7 @@ void LyricsDock::buildUi()
         if (type >= 0) {
             lyrics_renderer_clear();
             lyrics_renderer_scripture_clear();
-            lyrics_renderer_ctw_clear();
+            lyrics_renderer_paragraph_clear();
             lyrics_renderer_media_clear();
             lyrics_renderer_mv_clear(0);
             if (m_sharedGallery) m_sharedGallery->suspendPlayback();
@@ -2858,7 +2858,7 @@ void LyricsDock::loadServiceItemContent(int idx)
         uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() <<  8) | (uint32_t)fc.red();
         uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() <<  8) | (uint32_t)oc.red();
         lyrics_renderer_set_text_color(fcObs, ocObs);
-        lyrics_renderer_set_ctw_text_color(fcObs, ocObs); // paragraph sections
+        lyrics_renderer_set_paragraph_text_color(fcObs, ocObs); // paragraph sections
         lyrics_renderer_set_chinese_color(fcObs, ocObs);
         m_slideFontColor = fc;
         // Highlight the matching button
@@ -3193,7 +3193,7 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
 
     // Clear any displayed lyrics/CTW text so only the media is visible
     lyrics_renderer_clear();
-    lyrics_renderer_ctw_clear();
+    lyrics_renderer_paragraph_clear();
     m_currentBgPath.clear(); // force background re-push on next lyrics slide
 
     if (isVideoFile(path)) {
@@ -3669,9 +3669,9 @@ void LyricsDock::onSlideClicked(int index)
                     lyrics_renderer_media_push(bgPath, fadeMs);
                     m_currentBgPath = bgPath;
                 }
-                lyrics_renderer_ctw_push(item.title, slides[index]);
+                lyrics_renderer_paragraph_push(item.title, slides[index]);
                 if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[index]);
-                if (m_wsServer) m_wsServer->broadcastActiveMode("ctw");
+                if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
             }
         }
         return;
@@ -3777,7 +3777,7 @@ void LyricsDock::onSlideClicked(int index)
                         QColor oc = m_colorBtn[svcItem.colorPresetIdx]->outlineColor();
                         uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() <<  8) | (uint32_t)fc.red();
                         uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() <<  8) | (uint32_t)oc.red();
-                        lyrics_renderer_set_ctw_text_color(fcObs, ocObs);
+                        lyrics_renderer_set_paragraph_text_color(fcObs, ocObs);
                         m_slideFontColor = fc;
                     }
 
@@ -3795,9 +3795,9 @@ void LyricsDock::onSlideClicked(int index)
                         }
                     }
 
-                    lyrics_renderer_ctw_push(svcItem.title, slides[localIdx]);
+                    lyrics_renderer_paragraph_push(svcItem.title, slides[localIdx]);
                     if (m_wsServer) m_wsServer->broadcastScripture(svcItem.title, slides[localIdx]);
-                    if (m_wsServer) m_wsServer->broadcastActiveMode("ctw");
+                    if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
                     return;
                 }
                 globalIdx += slides.size();
@@ -3937,7 +3937,7 @@ void LyricsDock::onEditSlideApply()
                 setActiveSlide(saved);
             // Push the updated slide live
             if (!newText.trimmed().isEmpty()) {
-                lyrics_renderer_ctw_push(item.title, newText.trimmed());
+                lyrics_renderer_paragraph_push(item.title, newText.trimmed());
                 if (m_wsServer) m_wsServer->broadcastScripture(item.title, newText.trimmed());
             }
         }
@@ -4035,7 +4035,7 @@ void LyricsDock::onImportService()
     for (const auto &v : rawItems) {
         if (!v.isObject()) continue;
         const QString t = v.toObject()["type"].toString();
-        if (t == "song" || t == "paragraphs" || t == "ctw" || t == "scripture")
+        if (t == "song" || t == "paragraphs" || t == "paragraph" || t == "scripture")
             toImport.append(v);
     }
     if (toImport.isEmpty()) {
@@ -4151,7 +4151,7 @@ void LyricsDock::onColorPresetApplied(QColor fontColor, QColor outlineColor)
                 | ((uint32_t)outlineColor.green()  <<  8)
                 | (uint32_t)outlineColor.red();
     lyrics_renderer_set_text_color(fc, oc);
-    lyrics_renderer_set_ctw_text_color(fc, oc); // paragraph sections
+    lyrics_renderer_set_paragraph_text_color(fc, oc); // paragraph sections
     lyrics_renderer_set_chinese_color(fc, oc); // also update Chinese chars + translation
 
     // Propagate font color to all slide card labels
@@ -4247,7 +4247,7 @@ void LyricsDock::activatePrevSlide()  { onPrevSlide(); }
 
 void LyricsDock::lpNextSlide(const QString &mode)
 {
-    if (mode == "ctw" || mode == "scr") {
+    if (mode == "paragraph" || mode == "scr") {
         onNextSlide();
     } else if (mode == "ppt") {
         if (m_pptTab && m_pptTab->activeType() < 0)
@@ -4277,7 +4277,7 @@ void LyricsDock::lpNextSlide(const QString &mode)
 
 void LyricsDock::lpPrevSlide(const QString &mode)
 {
-    if (mode == "ctw" || mode == "scr") {
+    if (mode == "paragraph" || mode == "scr") {
         onPrevSlide();
     } else if (mode == "ppt") {
         if (m_pptTab && m_pptTab->activeType() < 0)

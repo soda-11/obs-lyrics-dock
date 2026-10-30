@@ -1,4 +1,4 @@
-// overlay-tab.cpp  v1.2
+﻿// overlay-tab.cpp  v1.2
 // Floating touch overlay window + its dock settings tab.
 
 #include "overlay-tab.hpp"
@@ -21,8 +21,8 @@
 #include <QScreen>
 
 // ── Static label/key tables ───────────────────────────────────
-const char *PptOverlayWindow::kModeKeys[]   = { "ctw", "scr", "lyr" };
-const char *PptOverlayWindow::kModeLabels[] = { "CTW", "SCR", "LYR" };
+const char *PptOverlayWindow::kModeKeys[]   = { "paragraph", "scr", "lyr" };
+const char *PptOverlayWindow::kModeLabels[] = { "Par", "SCR", "LYR" };
 const char *PptOverlayWindow::kPresLabels[] = { "PPT", "Google", "Canva" };
 
 // ── OBS scene helpers (file-scope) ────────────────────────────
@@ -480,7 +480,7 @@ void OverlayTab::buildUi()
     auto *sceneLayout = new QVBoxLayout(sceneGroup);
     sceneLayout->setSpacing(6);
 
-    static const char *kModeLabels[3] = { "CTW", "SCR", "LYR" };
+    static const char *kModeLabels[3] = { "Par", "SCR", "LYR" };
     for (int i = 0; i < 3; ++i) {
         auto *row    = new QHBoxLayout;
         auto *lbl    = new QLabel(QString(kModeLabels[i]) + ":");
@@ -593,7 +593,7 @@ void OverlayTab::buildUi()
 
 int OverlayTab::modeIndex(const QString &mode) const
 {
-    if (mode == "ctw") return 0;
+    if (mode == "paragraph") return 0;
     if (mode == "scr") return 1;
     if (mode == "lyr") return 2;
     return -1;

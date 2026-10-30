@@ -1,4 +1,4 @@
-// lyrics-renderer.cpp  v10.0
+﻿// lyrics-renderer.cpp  v10.0
 //
 // Render order (bottom → top):
 //   1. Media layer  — image_source or ffmpeg_source (scaled to fit canvas)
@@ -55,9 +55,9 @@ static QString s_pinyin;    // cached pinyin for re-apply on settings change
 static QString s_english;   // cached English translation
 
 // Scripture/CTW mode: set when either tab is displaying content.
-// s_ctwMode=true means CTW is active (uses ctw_ prefixes instead of scr_).
+// s_paragraphMode=true means CTW is active (uses ctw_ prefixes instead of scr_).
 static bool    s_scriptureMode = false;
-static bool    s_ctwMode       = false;
+static bool    s_paragraphMode       = false;
 static QString s_scripTitle;
 static QString s_scripText;
 
@@ -192,8 +192,8 @@ struct LyricsInstance {
     int bottomBarH   = DEF_BOTTOM_BAR_H;
     int scripTitleH  = DEF_SCRIP_TITLE_H;
     int scripHMargin = DEF_SCRIP_H_MARGIN;
-    int ctwTitleH    = DEF_SCRIP_TITLE_H;
-    int ctwHMargin   = DEF_SCRIP_H_MARGIN;
+    int paragraphTitleH    = DEF_SCRIP_TITLE_H;
+    int paragraphHMargin   = DEF_SCRIP_H_MARGIN;
 
     // Chinese mode layout
     int chPinyinY         = DEF_CH_PINYIN_Y;
@@ -295,16 +295,16 @@ static void updateTextChildren(LyricsInstance *inst, obs_data_t *s,
     pushTextChild(inst->srcTitle,  s,"title_",  title,  halfW,        barH);
 }
 
-// isCTW=true → use ctw_title_/ctw_text_ prefixes and CTW layout values.
-// isCTW=false (default) → use scr_title_/scr_text_ and Scripture layout values.
+// isParagraph=true → use ctw_title_/ctw_text_ prefixes and CTW layout values.
+// isParagraph=false (default) → use scr_title_/scr_text_ and Scripture layout values.
 static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
                                     const QString &title, const QString &text,
-                                    bool isCTW = false)
+                                    bool isParagraph = false)
 {
-    const char *titlePfx = isCTW ? "ctw_title_" : "scr_title_";
-    const char *textPfx  = isCTW ? "ctw_text_"  : "scr_text_";
-    int titleH  = isCTW ? inst->ctwTitleH  : inst->scripTitleH;
-    int hMargin = isCTW ? inst->ctwHMargin : inst->scripHMargin;
+    const char *titlePfx = isParagraph ? "paragraph_title_" : "scr_title_";
+    const char *textPfx  = isParagraph ? "paragraph_text_"  : "scr_text_";
+    int titleH  = isParagraph ? inst->paragraphTitleH  : inst->scripTitleH;
+    int hMargin = isParagraph ? inst->paragraphHMargin : inst->scripHMargin;
     int textW   = qMax(64, inst->canvasW - 2 * hMargin);
     pushTextChild(inst->srcScripTitle, s, titlePfx, title, textW, titleH);
     pushTextChild(inst->srcScripText,  s, textPfx,  text,  textW,
@@ -644,10 +644,10 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->chEnglishY        = readOrDef("ch_english_y",         DEF_CH_ENGLISH_Y);
     if (!obs_data_has_user_value(settings, "scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
-    inst->ctwTitleH  = obs_data_has_user_value(settings,"ctw_title_h")
-                       ? (int)obs_data_get_int(settings,"ctw_title_h") : DEF_SCRIP_TITLE_H;
-    inst->ctwHMargin = obs_data_has_user_value(settings,"ctw_h_margin")
-                       ? (int)obs_data_get_int(settings,"ctw_h_margin") : DEF_SCRIP_H_MARGIN;
+    inst->paragraphTitleH  = obs_data_has_user_value(settings,"paragraph_title_h")
+                       ? (int)obs_data_get_int(settings,"paragraph_title_h") : DEF_SCRIP_TITLE_H;
+    inst->paragraphHMargin = obs_data_has_user_value(settings,"paragraph_h_margin")
+                       ? (int)obs_data_get_int(settings,"paragraph_h_margin") : DEF_SCRIP_H_MARGIN;
 
     auto makeGdi=[](const char *name)->obs_source_t*{
         obs_data_t *d=obs_data_create();
@@ -726,8 +726,8 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"bottom_bar_h",  DEF_BOTTOM_BAR_H);
     obs_data_set_default_int(s,"scrip_title_h",  DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
-    obs_data_set_default_int(s,"ctw_title_h",    DEF_SCRIP_TITLE_H);
-    obs_data_set_default_int(s,"ctw_h_margin",   DEF_SCRIP_H_MARGIN);
+    obs_data_set_default_int(s,"paragraph_title_h",    DEF_SCRIP_TITLE_H);
+    obs_data_set_default_int(s,"paragraph_h_margin",   DEF_SCRIP_H_MARGIN);
     obs_data_set_default_int(s,"ch_pinyin_y",         DEF_CH_PINYIN_Y);
     obs_data_set_default_int(s,"ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
     obs_data_set_default_int(s,"ch_chinese_y",        DEF_CH_CHINESE_Y);
@@ -763,8 +763,8 @@ static void src_defaults(obs_data_t *s)
     setBox("scr_title_",32,1,0,ygold);
     setBox("scr_text_", 48,1,1,white);
     // CTW boxes: independent defaults matching Scripture
-    setBox("ctw_title_",32,1,0,ygold);
-    setBox("ctw_text_", 48,1,1,white);
+    setBox("paragraph_title_",32,1,0,ygold);
+    setBox("paragraph_text_", 48,1,1,white);
     // Chinese trilingual boxes (pinyin top, Chinese chars middle, English bottom)
     setBox("ch_pinyin_",  24,1,1,ygold);   // pinyin: smaller, gold-yellow
     setBox("ch_chinese_", 52,1,1,white);   // Chinese: large, white
@@ -853,8 +853,8 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"canvas_w",      "Width (px)",                       320,7680,1);
     obs_properties_add_int(cgrp,"canvas_h",      "Height (px)",                      180,4320,1);
     obs_properties_add_int(cgrp,"bottom_bar_h",  "Lyrics: bottom bar height (px)",    10, 400,1);
-    obs_properties_add_int(cgrp,"ctw_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
-    obs_properties_add_int(cgrp,"ctw_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
+    obs_properties_add_int(cgrp,"paragraph_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
+    obs_properties_add_int(cgrp,"paragraph_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
 
     // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
@@ -894,8 +894,8 @@ static obs_properties_t *src_props(void *)
     addBoxGroup(props,"lyrics_", "1.  English Lyrics — Main Text");
     addBoxGroup(props,"section_","2.  Lyrics — Section Label  (bottom-left)");
     addBoxGroup(props,"title_",  "3.  Lyrics — Song Title  (bottom-right)");
-    addBoxGroup(props,"ctw_title_","4.  Paragraph — Title  (top strip)");
-    addBoxGroup(props,"ctw_text_", "5.  Paragraph — Text  (main area)");
+    addBoxGroup(props,"paragraph_title_","4.  Paragraph — Title  (top strip)");
+    addBoxGroup(props,"paragraph_text_", "5.  Paragraph — Text  (main area)");
     addBoxGroup(props,"ch_pinyin_", "6.  Chinese — Pinyin  (top strip)");
     addBoxGroup(props,"ch_chinese_","7.  Chinese — Characters  (middle)");
     addBoxGroup(props,"ch_english_","8.  Chinese — English Translation  (bottom)");
@@ -926,10 +926,10 @@ static void src_update(void *data, obs_data_t *settings)
     inst->chEnglishY        = readOrDef2("ch_english_y",        DEF_CH_ENGLISH_Y);
     if(!obs_data_has_user_value(settings,"scrip_h_margin"))
         inst->scripHMargin = DEF_SCRIP_H_MARGIN;
-    inst->ctwTitleH  = obs_data_has_user_value(settings,"ctw_title_h")
-                       ? (int)obs_data_get_int(settings,"ctw_title_h") : DEF_SCRIP_TITLE_H;
-    inst->ctwHMargin = obs_data_has_user_value(settings,"ctw_h_margin")
-                       ? (int)obs_data_get_int(settings,"ctw_h_margin") : DEF_SCRIP_H_MARGIN;
+    inst->paragraphTitleH  = obs_data_has_user_value(settings,"paragraph_title_h")
+                       ? (int)obs_data_get_int(settings,"paragraph_title_h") : DEF_SCRIP_TITLE_H;
+    inst->paragraphHMargin = obs_data_has_user_value(settings,"paragraph_h_margin")
+                       ? (int)obs_data_get_int(settings,"paragraph_h_margin") : DEF_SCRIP_H_MARGIN;
     QMutexLocker lk(&s_mu);
     // Re-apply whichever mode is currently active so text re-layouts
     // correctly after a canvas size / font change.
@@ -937,7 +937,7 @@ static void src_update(void *data, obs_data_t *settings)
         clearChineseChildren(inst, settings);
         updateTextChildren(inst,settings,QString(),QString(),QString());
         updateScriptureChildren(inst,settings,
-            s_scripTitle, applySuperscript(s_scripText), s_ctwMode);
+            s_scripTitle, applySuperscript(s_scripText), s_paragraphMode);
     } else if (s_chineseMode) {
         updateScriptureChildren(inst, settings, QString(), QString());
         updateChineseChildren(inst, settings, s_pinyin, s_lyrics, s_english);
@@ -1663,7 +1663,7 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
 {
     QMutexLocker lk(&s_mu);
     s_scriptureMode = true;
-    s_ctwMode       = false;
+    s_paragraphMode       = false;
     s_scripTitle    = title;
     s_scripText     = text;
     s_chineseMode=false; s_pinyin.clear(); s_english.clear();
@@ -1681,7 +1681,7 @@ void lyrics_renderer_scripture_push(const QString &title, const QString &text)
 void lyrics_renderer_scripture_clear()
 {
     QMutexLocker lk(&s_mu);
-    if (s_ctwMode) return; // don't clear if CTW is the active mode
+    if (s_paragraphMode) return; // don't clear if CTW is the active mode
     s_scriptureMode = false;
     s_scripTitle.clear();
     s_scripText.clear();
@@ -1694,11 +1694,11 @@ void lyrics_renderer_scripture_clear()
 
 // ── Call to Worship Tab API ────────────────────────────────────
 
-void lyrics_renderer_ctw_push(const QString &title, const QString &text)
+void lyrics_renderer_paragraph_push(const QString &title, const QString &text)
 {
     QMutexLocker lk(&s_mu);
     s_scriptureMode = true;
-    s_ctwMode       = true;
+    s_paragraphMode       = true;
     s_scripTitle    = title;
     s_scripText     = text;
     s_chineseMode=false; s_pinyin.clear(); s_english.clear();
@@ -1713,12 +1713,12 @@ void lyrics_renderer_ctw_push(const QString &title, const QString &text)
     }
 }
 
-void lyrics_renderer_ctw_clear()
+void lyrics_renderer_paragraph_clear()
 {
     QMutexLocker lk(&s_mu);
-    if (!s_ctwMode) return; // don't clear if Scripture is the active mode
+    if (!s_paragraphMode) return; // don't clear if Scripture is the active mode
     s_scriptureMode = false;
-    s_ctwMode       = false;
+    s_paragraphMode       = false;
     s_scripTitle.clear();
     s_scripText.clear();
     for(auto *inst:s_instances){
@@ -1728,16 +1728,16 @@ void lyrics_renderer_ctw_clear()
     }
 }
 
-void lyrics_renderer_set_ctw_text_color(uint32_t fontColor, uint32_t outlineColor)
+void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor)
 {
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
         obs_data_t *s=obs_source_get_settings(inst->self);
-        obs_data_set_int(s,"ctw_text_color",
+        obs_data_set_int(s,"paragraph_text_color",
                          (long long)(fontColor   & 0x00FFFFFF));
-        obs_data_set_int(s,"ctw_text_outline_color",
+        obs_data_set_int(s,"paragraph_text_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        if(s_scriptureMode && s_ctwMode)
+        if(s_scriptureMode && s_paragraphMode)
             updateScriptureChildren(inst,s,
                 s_scripTitle, applySuperscript(s_scripText), true);
         obs_data_release(s);
@@ -1776,7 +1776,7 @@ void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
                          (long long)(fontColor   & 0x00FFFFFF));
         obs_data_set_int(s,"scr_text_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        if(s_scriptureMode && !s_ctwMode)
+        if(s_scriptureMode && !s_paragraphMode)
             updateScriptureChildren(inst,s,
                 s_scripTitle, applySuperscript(s_scripText), false);
         obs_data_release(s);

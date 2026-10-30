@@ -1,4 +1,4 @@
-// websocket-server.cpp  v9.5.1.1
+﻿// websocket-server.cpp  v9.5.1.1
 // Fixes:
 //   1. Frame parser: payload always starts at hdrLen (was reading mask as payload)
 //   2. Ping/pong: respond to opcode 0x9 with pong 0xA — keeps browser alive
@@ -507,7 +507,7 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                     sendJson(client, msg2);
                 };
                 sendMediaList("lyrics",    m_lastLyricsMediaList);
-                sendMediaList("ctw",       m_lastCtwMediaList);
+                sendMediaList("paragraph",       m_lastParagraphMediaList);
                 sendMediaList("scripture", m_lastScriptureMediaList);
 
                 QJsonArray sceneArr;
@@ -555,11 +555,11 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                 }
                 // CTW full state (for manager slide rebuild)
                 {
-                    QJsonObject ctwState;
-                    ctwState["type"]  = "ctwState";
-                    ctwState["title"] = m_lastCtwTitle;
-                    ctwState["text"]  = m_lastCtwText;
-                    sendJson(client, ctwState);
+                    QJsonObject paragraphState;
+                    paragraphState["type"]  = "paragraphState";
+                    paragraphState["title"] = m_lastParagraphTitle;
+                    paragraphState["text"]  = m_lastParagraphText;
+                    sendJson(client, paragraphState);
                 }
                 // Color presets — read live from dock so new managers see current colors
                 if (m_dock) {
@@ -636,8 +636,8 @@ void WebSocketServer::handleWsFrame(WsClient *client,
         } else if (type == "lpPrev") {
             QString mode = msg["mode"].toString("lyr");
             QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->lpPrevSlide(mode); }, Qt::QueuedConnection);
-        } else if (type == "lpCTW") {
-            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushCTWCurrent(); }, Qt::QueuedConnection);
+        } else if (type == "lpParagraph") {
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushParagraphCurrent(); }, Qt::QueuedConnection);
         } else if (type == "lpScripture") {
             QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushScriptureCurrent(); }, Qt::QueuedConnection);
         } else if (type == "presentationShow") {
@@ -898,9 +898,9 @@ void WebSocketServer::handleCommand(WsClient *client,
             Qt::QueuedConnection);
         return;
     }
-    if (type == "lpCTW") {
+    if (type == "lpParagraph") {
         LyricsDock *dock = m_dock;
-        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushCTWCurrent(); },
+        QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->pushParagraphCurrent(); },
             Qt::QueuedConnection);
         return;
     }
@@ -939,17 +939,17 @@ void WebSocketServer::handleCommand(WsClient *client,
     }
 
     // ── Call to Worship ───────────────────────────────────────────
-    if (type == "applyCTW") {
+    if (type == "applyParagraph") {
         QString title = msg["title"].toString();
         QString text  = msg["text"].toString();
         LyricsDock *dock = m_dock;
         QMetaObject::invokeMethod(qApp, [=](){
-            if (dock) dock->applyCTWFromRemote(title, text);
+            if (dock) dock->applyParagraphFromRemote(title, text);
             if (s_server) s_server->broadcastCtwState(title, text);
         }, Qt::QueuedConnection);
         return;
     }
-    if (type == "pushCTWSlide") {
+    if (type == "pushParagraphSlide") {
         QString title = msg["title"].toString();
         QString text  = msg["text"].toString();
         QMetaObject::invokeMethod(qApp, [=](){
@@ -958,7 +958,7 @@ void WebSocketServer::handleCommand(WsClient *client,
         }, Qt::QueuedConnection);
         return;
     }
-    if (type == "clearCTW") {
+    if (type == "clearParagraph") {
         QMetaObject::invokeMethod(qApp, [=](){
             lyrics_renderer_scripture_clear();
             if (s_server) s_server->broadcastScripture(QString(), QString());
@@ -1132,10 +1132,10 @@ void WebSocketServer::broadcastScriptureState(const QString &title,
 
 void WebSocketServer::broadcastCtwState(const QString &title, const QString &text)
 {
-    m_lastCtwTitle = title;
-    m_lastCtwText  = text;
+    m_lastParagraphTitle = title;
+    m_lastParagraphText  = text;
     QJsonObject obj;
-    obj["type"]  = "ctwState";
+    obj["type"]  = "paragraphState";
     obj["title"] = title;
     obj["text"]  = text;
     broadcastJson(obj, true); // managers only
@@ -1219,7 +1219,7 @@ void WebSocketServer::broadcastServiceOrder(const QJsonArray &order)
 void WebSocketServer::broadcastMediaList(const QString &tab, const QStringList &paths)
 {
     // Cache per-tab
-    if      (tab == "ctw")       m_lastCtwMediaList       = paths;
+    if      (tab == "paragraph")       m_lastParagraphMediaList       = paths;
     else if (tab == "scripture") m_lastScriptureMediaList = paths;
     else                         m_lastLyricsMediaList    = paths;
 

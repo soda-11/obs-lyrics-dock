@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 // websocket-server.hpp  v9.5.1
 
 #include <QObject>
@@ -42,7 +42,7 @@ public:
     void broadcastClear();
     void broadcastScene(const QString &sceneName);
     void broadcastMediaState(const QString &filePath);
-    // tab: "lyrics" | "ctw" | "scripture"
+    // tab: "lyrics" | "paragraph" | "scripture"
     void broadcastMediaList(const QString &tab, const QStringList &paths);
     void broadcastSongs(const QJsonArray &songs);
     void broadcastServiceOrder(const QJsonArray &order);
@@ -59,7 +59,7 @@ public:
     void broadcastPptState(int current, int total, const QString &title = QString());
     // Broadcasts which presentation type is active: 0=PPT 1=GSlides 2=Canva -1=none
     void broadcastPresentationActive(int type);
-    // Broadcasts which content tab is active ("ctw"|"scr"|"lyr"|"ppt") — used by LP remote
+    // Broadcasts which content tab is active ("paragraph"|"scr"|"lyr"|"ppt") — used by LP remote
     void broadcastActiveMode(const QString &mode);
     // Broadcasts color preset colors + active index to all manager clients
     void broadcastColorPresets(const QJsonArray &presets, int activeIdx);
@@ -112,7 +112,7 @@ private:
     QString     m_lastScene;
     QString     m_lastMediaPath;
     QStringList m_lastLyricsMediaList;
-    QStringList m_lastCtwMediaList;
+    QStringList m_lastParagraphMediaList;
     QStringList m_lastScriptureMediaList;
     QJsonArray  m_lastSongsJson;
     QJsonArray  m_lastServiceOrderJson;
@@ -125,8 +125,8 @@ private:
     QString     m_lastScripText;     // currently displayed slide text
     QString     m_lastScripFullTitle;// full title from Text panel
     QString     m_lastScripFullText; // full raw text from Text panel
-    QString     m_lastCtwTitle;      // CTW full title (for new-connection replay)
-    QString     m_lastCtwText;       // CTW full raw text
+    QString     m_lastParagraphTitle;      // CTW full title (for new-connection replay)
+    QString     m_lastParagraphText;       // CTW full raw text
     QJsonArray  m_lastColorPresets;  // array of {font, outline} per preset
     int         m_lastActivePreset = -1; // which preset is currently active
     QStringList m_lastAudioBinList;
