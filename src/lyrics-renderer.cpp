@@ -73,8 +73,8 @@ static QString s_qrPath;
 #define DEF_SCRIP_H_MARGIN 100   // left/right horizontal margin (px)
 // Chinese interleave layout.
 // Pinyin: ONE textbox at chPinyinY, height = canvasH - chPinyinY (no line limit).
-//   chPinyinSpacing (float) = extra spacing between lines as a font-size multiplier;
-//   converted to OBS line_spacing pixels = spacing × font_size.
+//   Blank lines are inserted between content lines (chPinyinSpacing) so they
+//   sit in the gaps between the Chinese character strips below.
 // Chinese characters: up to MAX_CH_STRIPS individual strips.
 //   Strip i is rendered at: chChineseY + i * chChineseInterval
 //   Each strip has height chChineseStripH.
@@ -172,7 +172,7 @@ struct LyricsInstance {
     obs_source_t *srcTitle   = nullptr;
 
     // Chinese mode — single pinyin textbox + up to MAX_CH_STRIPS character strips.
-    // srcPinyin: one textbox; OBS line_spacing set from chPinyinSpacing × font size.
+    // srcPinyin: one textbox with blank-line spacing between content lines.
     // srcChineseStrips[i]: one strip per content line, rendered at
     //   chChineseY + i * chChineseInterval
     obs_source_t *srcPinyin = nullptr;
@@ -201,7 +201,7 @@ struct LyricsInstance {
 
     // Chinese mode layout
     int    chPinyinY         = DEF_CH_PINYIN_Y;
-    double chPinyinSpacing   = DEF_CH_PINYIN_SPACING;
+    int    chPinyinSpacing   = DEF_CH_PINYIN_SPACING;
     int    chChineseY        = DEF_CH_CHINESE_Y;
     int chChineseStripH   = DEF_CH_CHINESE_STRIP_H;
     int chChineseInterval = DEF_CH_CHINESE_INTERVAL;
@@ -329,14 +329,22 @@ static void updateChineseChildren(LyricsInstance *inst, obs_data_t *s,
                                   const QString &chinese,
                                   const QString &english)
 {
-    // Pinyin: use OBS line_spacing (extra px between lines) derived from spacing multiplier × font size
-    int pinyinFontSz = (int)obs_data_get_int(s, "ch_pinyin_font_size");
-    if (pinyinFontSz <= 0) pinyinFontSz = 48;
-    int pinyinSpacingPx = (inst->chPinyinSpacing > 0.0)
-                          ? (int)(inst->chPinyinSpacing * pinyinFontSz) : 0;
+    // Pinyin: insert blank lines between content lines for spacing
+    auto addSpacing = [](const QString &text, int sp) -> QString {
+        if (sp <= 0 || text.isEmpty()) return text;
+        QStringList lines = text.split('\n');
+        QStringList result;
+        for (int i = 0; i < lines.size(); ++i) {
+            result << lines[i];
+            if (i < lines.size() - 1)
+                for (int k = 0; k < sp; ++k) result << QString();
+        }
+        return result.join('\n');
+    };
     int pinyinH = qMax(64, inst->canvasH - inst->chPinyinY);
     pushTextChild(inst->srcPinyin, s, "ch_pinyin_",
-                  pinyin, inst->canvasW, pinyinH, pinyinSpacingPx);
+                  addSpacing(pinyin, inst->chPinyinSpacing),
+                  inst->canvasW, pinyinH);
 
     // Chinese char strips — one per content line
     QStringList zhLines = chinese.isEmpty() ? QStringList() : chinese.split('\n');
@@ -639,9 +647,7 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->lyrTopPadding = readOrDef("lyrics_top_padding",    0);
     inst->lyrBotPadding = readOrDef("lyrics_bottom_padding", 0);
     inst->chPinyinY     = readOrDef("ch_pinyin_y",          DEF_CH_PINYIN_Y);
-    inst->chPinyinSpacing = obs_data_has_user_value(settings,"ch_pinyin_spacing")
-                            ? obs_data_get_double(settings,"ch_pinyin_spacing")
-                            : (double)DEF_CH_PINYIN_SPACING;
+    inst->chPinyinSpacing   = readOrDef("ch_pinyin_spacing",    DEF_CH_PINYIN_SPACING);
     inst->chChineseY        = readOrDef("ch_chinese_y",         DEF_CH_CHINESE_Y);
     inst->chChineseStripH   = readOrDef("ch_chinese_strip_h",   DEF_CH_CHINESE_STRIP_H);
     inst->chChineseInterval = readOrDef("ch_chinese_interval",  DEF_CH_CHINESE_INTERVAL);
@@ -735,7 +741,7 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int   (s,"lyrics_top_padding",    0);
     obs_data_set_default_int   (s,"lyrics_bottom_padding", 0);
     obs_data_set_default_int   (s,"ch_pinyin_y",           DEF_CH_PINYIN_Y);
-    obs_data_set_default_double(s,"ch_pinyin_spacing",     (double)DEF_CH_PINYIN_SPACING);
+    obs_data_set_default_int   (s,"ch_pinyin_spacing",     DEF_CH_PINYIN_SPACING);
     obs_data_set_default_int(s,"ch_chinese_y",        DEF_CH_CHINESE_Y);
     obs_data_set_default_int(s,"ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
     obs_data_set_default_int(s,"ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
@@ -868,9 +874,8 @@ static obs_properties_t *src_props(void *)
     obs_properties_t *chgrp = obs_properties_create();
     obs_properties_add_int(chgrp,"ch_pinyin_y",
         "Pinyin starting Y position (px)", 0, 4320, 1);
-    obs_properties_add_float(chgrp,"ch_pinyin_spacing",
-        "Pinyin line spacing (multiplier of font size, e.g. 1.5 = 1.5× font size gap between lines)",
-        0.0, 5.0, 0.1);
+    obs_properties_add_int(chgrp,"ch_pinyin_spacing",
+        "Pinyin line spacing (blank lines between lines)", 0, 10, 1);
     obs_properties_add_int(chgrp,"ch_chinese_y",
         "Characters starting Y position (px)", 0, 4320, 1);
     obs_properties_add_int(chgrp,"ch_chinese_strip_h",
@@ -930,9 +935,7 @@ static void src_update(void *data, obs_data_t *settings)
     inst->lyrTopPadding = readOrDef2("lyrics_top_padding",    0);
     inst->lyrBotPadding = readOrDef2("lyrics_bottom_padding", 0);
     inst->chPinyinY     = readOrDef2("ch_pinyin_y",          DEF_CH_PINYIN_Y);
-    inst->chPinyinSpacing = obs_data_has_user_value(settings,"ch_pinyin_spacing")
-                            ? obs_data_get_double(settings,"ch_pinyin_spacing")
-                            : (double)DEF_CH_PINYIN_SPACING;
+    inst->chPinyinSpacing   = readOrDef2("ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
     inst->chChineseY        = readOrDef2("ch_chinese_y",        DEF_CH_CHINESE_Y);
     inst->chChineseStripH   = readOrDef2("ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
     inst->chChineseInterval = readOrDef2("ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
