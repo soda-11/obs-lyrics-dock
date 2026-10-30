@@ -73,8 +73,8 @@ static QString s_qrPath;
 #define DEF_SCRIP_H_MARGIN 100   // left/right horizontal margin (px)
 // Chinese interleave layout.
 // Pinyin: ONE textbox at chPinyinY, height = canvasH - chPinyinY (no line limit).
-//   Blank lines are inserted between content lines (chPinyinSpacing) so they
-//   sit in the gaps between the Chinese character strips below.
+//   chPinyinSpacing (float) = extra spacing between lines as a font-size multiplier;
+//   converted to OBS line_spacing pixels = spacing × font_size.
 // Chinese characters: up to MAX_CH_STRIPS individual strips.
 //   Strip i is rendered at: chChineseY + i * chChineseInterval
 //   Each strip has height chChineseStripH.
@@ -172,7 +172,7 @@ struct LyricsInstance {
     obs_source_t *srcTitle   = nullptr;
 
     // Chinese mode — single pinyin textbox + up to MAX_CH_STRIPS character strips.
-    // srcPinyin: one textbox with blank-line spacing between content lines.
+    // srcPinyin: one textbox; OBS line_spacing set from chPinyinSpacing × font size.
     // srcChineseStrips[i]: one strip per content line, rendered at
     //   chChineseY + i * chChineseInterval
     obs_source_t *srcPinyin = nullptr;
@@ -195,10 +195,14 @@ struct LyricsInstance {
     int paragraphTitleH    = DEF_SCRIP_TITLE_H;
     int paragraphHMargin   = DEF_SCRIP_H_MARGIN;
 
+    // English lyrics vertical padding (px) — shrinks the lyrics textbox
+    int lyrTopPadding  = 0;
+    int lyrBotPadding  = 0;
+
     // Chinese mode layout
-    int chPinyinY         = DEF_CH_PINYIN_Y;
-    int chPinyinSpacing   = DEF_CH_PINYIN_SPACING;
-    int chChineseY        = DEF_CH_CHINESE_Y;
+    int    chPinyinY         = DEF_CH_PINYIN_Y;
+    double chPinyinSpacing   = DEF_CH_PINYIN_SPACING;
+    int    chChineseY        = DEF_CH_CHINESE_Y;
     int chChineseStripH   = DEF_CH_CHINESE_STRIP_H;
     int chChineseInterval = DEF_CH_CHINESE_INTERVAL;
     int chEnglishY        = DEF_CH_ENGLISH_Y;
@@ -222,7 +226,8 @@ static const char *vStr(int v)
 // ── Text child push ───────────────────────────────────────────
 static void pushTextChild(obs_source_t *child, obs_data_t *s,
                           const char *prefix,
-                          const QString &text, int extW, int extH)
+                          const QString &text, int extW, int extH,
+                          int lineSpacingPx = 0)
 {
     if (!child) return;
     obs_data_t *gdi = obs_data_create();
@@ -277,6 +282,8 @@ static void pushTextChild(obs_source_t *child, obs_data_t *s,
     obs_data_set_bool(gdi,"extents_wrap",true);
     obs_data_set_int (gdi,"extents_cx",  extW);
     obs_data_set_int (gdi,"extents_cy",  extH);
+    if (lineSpacingPx > 0)
+        obs_data_set_int(gdi,"line_spacing", lineSpacingPx);
 
     obs_source_update(child,gdi);
     obs_data_release(gdi);
@@ -290,7 +297,8 @@ static void updateTextChildren(LyricsInstance *inst, obs_data_t *s,
     int mainH=inst->canvasH-inst->bottomBarH;
     int halfW=inst->canvasW/2;
     int barH =inst->bottomBarH;
-    pushTextChild(inst->srcLyrics, s,"lyrics_", lyrics, inst->canvasW,mainH);
+    int lyrH = qMax(1, mainH - inst->lyrTopPadding - inst->lyrBotPadding);
+    pushTextChild(inst->srcLyrics, s,"lyrics_", lyrics, inst->canvasW, lyrH);
     pushTextChild(inst->srcSection,s,"section_",section,halfW,        barH);
     pushTextChild(inst->srcTitle,  s,"title_",  title,  halfW,        barH);
 }
@@ -321,22 +329,14 @@ static void updateChineseChildren(LyricsInstance *inst, obs_data_t *s,
                                   const QString &chinese,
                                   const QString &english)
 {
-    // Pinyin: add blank lines between content lines for spacing
-    auto addSpacing = [](const QString &text, int sp) -> QString {
-        if (sp <= 0 || text.isEmpty()) return text;
-        QStringList lines = text.split('\n');
-        QStringList result;
-        for (int i = 0; i < lines.size(); ++i) {
-            result << lines[i];
-            if (i < lines.size() - 1)
-                for (int k = 0; k < sp; ++k) result << QString();
-        }
-        return result.join('\n');
-    };
+    // Pinyin: use OBS line_spacing (extra px between lines) derived from spacing multiplier × font size
+    int pinyinFontSz = (int)obs_data_get_int(s, "ch_pinyin_font_size");
+    if (pinyinFontSz <= 0) pinyinFontSz = 48;
+    int pinyinSpacingPx = (inst->chPinyinSpacing > 0.0)
+                          ? (int)(inst->chPinyinSpacing * pinyinFontSz) : 0;
     int pinyinH = qMax(64, inst->canvasH - inst->chPinyinY);
     pushTextChild(inst->srcPinyin, s, "ch_pinyin_",
-                  addSpacing(pinyin, inst->chPinyinSpacing),
-                  inst->canvasW, pinyinH);
+                  pinyin, inst->canvasW, pinyinH, pinyinSpacingPx);
 
     // Chinese char strips — one per content line
     QStringList zhLines = chinese.isEmpty() ? QStringList() : chinese.split('\n');
@@ -636,8 +636,12 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
         return obs_data_has_user_value(settings,key)
                ? (int)obs_data_get_int(settings,key) : def;
     };
-    inst->chPinyinY         = readOrDef("ch_pinyin_y",          DEF_CH_PINYIN_Y);
-    inst->chPinyinSpacing   = readOrDef("ch_pinyin_spacing",    DEF_CH_PINYIN_SPACING);
+    inst->lyrTopPadding = readOrDef("lyrics_top_padding",    0);
+    inst->lyrBotPadding = readOrDef("lyrics_bottom_padding", 0);
+    inst->chPinyinY     = readOrDef("ch_pinyin_y",          DEF_CH_PINYIN_Y);
+    inst->chPinyinSpacing = obs_data_has_user_value(settings,"ch_pinyin_spacing")
+                            ? obs_data_get_double(settings,"ch_pinyin_spacing")
+                            : (double)DEF_CH_PINYIN_SPACING;
     inst->chChineseY        = readOrDef("ch_chinese_y",         DEF_CH_CHINESE_Y);
     inst->chChineseStripH   = readOrDef("ch_chinese_strip_h",   DEF_CH_CHINESE_STRIP_H);
     inst->chChineseInterval = readOrDef("ch_chinese_interval",  DEF_CH_CHINESE_INTERVAL);
@@ -728,8 +732,10 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
     obs_data_set_default_int(s,"paragraph_title_h",    DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"paragraph_h_margin",   DEF_SCRIP_H_MARGIN);
-    obs_data_set_default_int(s,"ch_pinyin_y",         DEF_CH_PINYIN_Y);
-    obs_data_set_default_int(s,"ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
+    obs_data_set_default_int   (s,"lyrics_top_padding",    0);
+    obs_data_set_default_int   (s,"lyrics_bottom_padding", 0);
+    obs_data_set_default_int   (s,"ch_pinyin_y",           DEF_CH_PINYIN_Y);
+    obs_data_set_default_double(s,"ch_pinyin_spacing",     (double)DEF_CH_PINYIN_SPACING);
     obs_data_set_default_int(s,"ch_chinese_y",        DEF_CH_CHINESE_Y);
     obs_data_set_default_int(s,"ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
     obs_data_set_default_int(s,"ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
@@ -852,7 +858,9 @@ static obs_properties_t *src_props(void *)
     obs_properties_t *cgrp=obs_properties_create();
     obs_properties_add_int(cgrp,"canvas_w",      "Width (px)",                       320,7680,1);
     obs_properties_add_int(cgrp,"canvas_h",      "Height (px)",                      180,4320,1);
-    obs_properties_add_int(cgrp,"bottom_bar_h",  "Lyrics: bottom bar height (px)",    10, 400,1);
+    obs_properties_add_int(cgrp,"bottom_bar_h",         "Lyrics: bottom bar height (px)",      10, 400,1);
+    obs_properties_add_int(cgrp,"lyrics_top_padding",    "Lyrics: top padding (px)",            0, 1080,1);
+    obs_properties_add_int(cgrp,"lyrics_bottom_padding", "Lyrics: bottom padding (px)",         0, 1080,1);
     obs_properties_add_int(cgrp,"paragraph_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
     obs_properties_add_int(cgrp,"paragraph_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
 
@@ -860,8 +868,9 @@ static obs_properties_t *src_props(void *)
     obs_properties_t *chgrp = obs_properties_create();
     obs_properties_add_int(chgrp,"ch_pinyin_y",
         "Pinyin starting Y position (px)", 0, 4320, 1);
-    obs_properties_add_int(chgrp,"ch_pinyin_spacing",
-        "Pinyin line spacing (blank lines between lines)", 0, 10, 1);
+    obs_properties_add_float(chgrp,"ch_pinyin_spacing",
+        "Pinyin line spacing (multiplier of font size, e.g. 1.5 = 1.5× font size gap between lines)",
+        0.0, 5.0, 0.1);
     obs_properties_add_int(chgrp,"ch_chinese_y",
         "Characters starting Y position (px)", 0, 4320, 1);
     obs_properties_add_int(chgrp,"ch_chinese_strip_h",
@@ -918,8 +927,12 @@ static void src_update(void *data, obs_data_t *settings)
         return obs_data_has_user_value(settings,key)
                ? (int)obs_data_get_int(settings,key) : def;
     };
-    inst->chPinyinY         = readOrDef2("ch_pinyin_y",         DEF_CH_PINYIN_Y);
-    inst->chPinyinSpacing   = readOrDef2("ch_pinyin_spacing",   DEF_CH_PINYIN_SPACING);
+    inst->lyrTopPadding = readOrDef2("lyrics_top_padding",    0);
+    inst->lyrBotPadding = readOrDef2("lyrics_bottom_padding", 0);
+    inst->chPinyinY     = readOrDef2("ch_pinyin_y",          DEF_CH_PINYIN_Y);
+    inst->chPinyinSpacing = obs_data_has_user_value(settings,"ch_pinyin_spacing")
+                            ? obs_data_get_double(settings,"ch_pinyin_spacing")
+                            : (double)DEF_CH_PINYIN_SPACING;
     inst->chChineseY        = readOrDef2("ch_chinese_y",        DEF_CH_CHINESE_Y);
     inst->chChineseStripH   = readOrDef2("ch_chinese_strip_h",  DEF_CH_CHINESE_STRIP_H);
     inst->chChineseInterval = readOrDef2("ch_chinese_interval", DEF_CH_CHINESE_INTERVAL);
@@ -1141,10 +1154,9 @@ static void src_render(void *data, gs_effect_t *effect)
         obs_source_video_render(inst->srcEnglish);
         gs_matrix_pop();
     } else {
-        // ── 4. Lyrics text — full canvas (English mode) ───────
-        // Empty when in scripture mode; non-empty only when Lyrics tab is active.
+        // ── 4. Lyrics text — offset by top padding ────────────
         gs_matrix_push();
-        gs_matrix_translate3f(0.f, 0.f, 0.f);
+        gs_matrix_translate3f(0.f, (float)inst->lyrTopPadding, 0.f);
         obs_source_video_render(inst->srcLyrics);
         gs_matrix_pop();
     }
