@@ -1989,6 +1989,10 @@ void LyricsDock::buildUi()
     // ── Cross-panel media coordination ───────────────────────
     connect(m_sharedGallery, &MediaGallery::mediaActivated, this, [this](){
         m_videoTab->stopPlayback();
+        // Sync bg path cache — gallery pushes to OBS directly; without this,
+        // applySlideBackground() sees a stale m_currentBgPath and skips re-pushing
+        // the slide's assigned background when a slide card is next clicked.
+        if (m_sharedGallery) m_currentBgPath = m_sharedGallery->activeItemPath();
     });
     connect(m_videoTab, &VideoTab::playbackStarted, this, [this](){
         if (m_pptTab && m_pptTab->activeType() >= 0) m_pptTab->requestShow(-1);
@@ -1999,6 +2003,7 @@ void LyricsDock::buildUi()
     });
     connect(m_sharedGallery, &MediaGallery::stopAllRequested, this, [this](){
         m_videoTab->stopPlayback();
+        m_currentBgPath.clear(); // gallery cleared the OBS bg; reset cache to match
     });
     // Save mediaPaths back to the active service item whenever VideoTab's list changes
     connect(m_videoTab, &VideoTab::mediaListChanged, this, [this](const QStringList &paths){
