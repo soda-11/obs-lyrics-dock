@@ -1263,7 +1263,7 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
     case ServiceItem::Type::Media: {
         if (slideIdx < 0 || slideIdx >= item.mediaPaths.size()) return;
         const QString &path = item.mediaPaths[slideIdx];
-        if (isVideoFile(path) && m_audioBin) m_audioBin->stopPlayback();
+        // audio runs independently — video starting no longer stops it
         lyrics_renderer_clear();   // wipe any lyrics from OBS source
         int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
         lyrics_renderer_media_push(path, fadeMs);
@@ -1323,7 +1323,6 @@ void LyricsDock::restoreCurrentTabContent()
         break;
     default:
         if (m_activeSlide >= 0) pushCurrentSlide();
-        if (m_sharedGallery) m_sharedGallery->replayActive();
         break;
     }
 }
@@ -1958,13 +1957,7 @@ void LyricsDock::buildUi()
     m_audioBin = new AudioBin(rightPanel);
     rightL->addWidget(m_audioBin, 1);
 
-    // Stop audio when a VIDEO starts playing (images do not stop audio)
-    connect(m_sharedGallery, &MediaGallery::videoActivated,
-            m_audioBin, &AudioBin::stopPlayback);
-    // Stop gallery video when audio bin starts playing
-    connect(m_audioBin, &AudioBin::playbackStarted, this, [this]() {
-        if (m_sharedGallery) m_sharedGallery->stopPlayback();
-    });
+    // Audio and video/picture are independent — no mutual stop on either side.
 
     // Assemble splitter
     mainSplit->addWidget(leftPanel);
@@ -1999,7 +1992,6 @@ void LyricsDock::buildUi()
         lyrics_renderer_clear();
         lyrics_renderer_scripture_clear();
         if (m_sharedGallery) m_sharedGallery->clearActiveCard();
-        if (m_audioBin) m_audioBin->stopPlayback();
     });
     connect(m_sharedGallery, &MediaGallery::stopAllRequested, this, [this](){
         m_videoTab->stopPlayback();
@@ -3184,7 +3176,6 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
     m_currentBgPath.clear(); // force background re-push on next lyrics slide
 
     if (isVideoFile(path)) {
-        if (m_audioBin) m_audioBin->stopPlayback();
         lyrics_renderer_mv_video_push(path, 0);
     } else
         lyrics_renderer_media_push(path, 0);
@@ -3810,7 +3801,6 @@ void LyricsDock::onSlideClicked(int index)
     setActiveSlide(index);
     pushCurrentSlide();
     if (m_wsServer) m_wsServer->broadcastActiveMode("lyr");
-    if (m_sharedGallery) m_sharedGallery->replayActive();
 }
 
 void LyricsDock::onSlideEditRequested(int sectionIndex)
