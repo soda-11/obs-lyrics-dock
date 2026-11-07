@@ -18,6 +18,7 @@
 #include <util/platform.h>
 #include <QMutex>
 #include <QMutexLocker>
+#include <atomic>
 #include <QList>
 #include <QString>
 #include <QFileInfo>
@@ -213,6 +214,8 @@ struct LyricsInstance {
 };
 
 static QList<LyricsInstance*> s_instances;
+// When true, media/video audio is silenced; Audio Bin (audioSrc) still passes through.
+static std::atomic<bool> s_muteMediaAudio{false};
 
 // ── Helpers ───────────────────────────────────────────────────
 static std::string pk(const char *prefix, const char *field)
@@ -377,11 +380,14 @@ static void clearChineseChildren(LyricsInstance *inst, obs_data_t *s)
 }
 
 // ── Audio capture callback ────────────────────────────────────
-static void mediaAudioCb(void *param, obs_source_t *,
+static void mediaAudioCb(void *param, obs_source_t *src,
                           const struct audio_data *audio, bool muted)
 {
     auto *inst=static_cast<LyricsInstance*>(param);
     if(!inst||!inst->self||muted) return;
+    // Audio Bin (audioSrc) always passes through. All other media sources
+    // (bgSlots, musicSrc) are silenced when Audio Bin is playing.
+    if (s_muteMediaAudio.load() && src != inst->audioSrc) return;
     const struct audio_output_info *aoi=
         audio_output_get_info(obs_get_audio());
     if(!aoi) return;
@@ -1338,6 +1344,11 @@ static obs_source_t *getMvVideoSrc(LyricsInstance *inst)
 }
 
 // ── Background debug API ──────────────────────────────────────
+void lyrics_renderer_mute_media_audio(bool mute)
+{
+    s_muteMediaAudio.store(mute);
+}
+
 void lyrics_renderer_set_bg_debug(bool enable)
 {
     QMutexLocker lk(&s_mu);

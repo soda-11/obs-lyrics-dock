@@ -204,6 +204,7 @@ void AudioBin::stopPlayback()
     m_statusLbl->setStyleSheet("color:#6b6b7b; font-size:9px; padding:0 2px;");
 
     if (m_wsServer) m_wsServer->broadcastAudioBinState(-1, false);
+    emit playbackStopped();
 }
 
 void AudioBin::rebuildList()

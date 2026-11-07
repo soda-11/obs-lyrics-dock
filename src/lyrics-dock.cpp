@@ -1957,7 +1957,10 @@ void LyricsDock::buildUi()
     m_audioBin = new AudioBin(rightPanel);
     rightL->addWidget(m_audioBin, 1);
 
-    // Audio and video/picture are independent — no mutual stop on either side.
+    // Audio Bin takes priority: mute video/media audio while Audio Bin is playing.
+    // When Audio Bin stops, media audio resumes automatically.
+    connect(m_audioBin, &AudioBin::playbackStarted, this, [](){ lyrics_renderer_mute_media_audio(true);  });
+    connect(m_audioBin, &AudioBin::playbackStopped, this, [](){ lyrics_renderer_mute_media_audio(false); });
 
     // Assemble splitter
     mainSplit->addWidget(leftPanel);

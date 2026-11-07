@@ -28,8 +28,8 @@ public slots:
     void stopPlayback();
 
 signals:
-    // Emitted when audio starts playing so LyricsDock can pause other media if needed.
-    void playbackStarted();
+    void playbackStarted();   // Audio Bin began playing
+    void playbackStopped();   // Audio Bin fully stopped (user stop, end of file, or media override)
 
 private slots:
     void onAddAudio();

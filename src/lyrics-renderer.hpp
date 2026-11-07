@@ -86,6 +86,10 @@ void lyrics_renderer_music_play_pause(bool pause);
 void lyrics_renderer_set_bg_debug(bool enable);
 bool lyrics_renderer_get_bg_debug();
 
+// Mute all media/video audio (bgSlots, musicSrc) while Audio Bin is playing.
+// Audio Bin (audioSrc) is never affected — it always passes through.
+void lyrics_renderer_mute_media_audio(bool mute);
+
 // ── QR Overlay API ────────────────────────────────────────────
 // Show a QR code image (80×80 px PNG) at bottom-right of the OBS canvas.
 // Call qr_show() with the path to the pre-rendered PNG file,
