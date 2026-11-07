@@ -1,5 +1,5 @@
 ﻿; ============================================================
-; OBS Lyrics Dock — NSIS Installer  v12.14.0
+; OBS Lyrics Dock — NSIS Installer  v12.15.0
 ; ============================================================
 ; Targets: Windows 10/11 x64
 ; Installs into the OBS Studio plugin directories, auto-detected
@@ -11,8 +11,8 @@ SetCompressor /SOLID lzma
 
 ; ── Plugin metadata ─────────────────────────────────────────
 !define PLUGIN_NAME    "OBS Lyrics Dock"
-!define PLUGIN_VERSION "12.14.0"
-; v12.14.0: Audio/video independent + slide bg no longer overridden by gallery replayActive
+!define PLUGIN_VERSION "12.15.0"
+; v12.15.0: Audio/video independent + slide bg no longer overridden by gallery replayActive
 !define PLUGIN_AUTHOR  "OBS Lyrics Dock"
 !define PLUGIN_DLL     "obs-lyrics-dock.dll"
 !define PLUGIN_ID      "obs-lyrics-dock"
@@ -24,7 +24,7 @@ SetCompressor /SOLID lzma
 !include "FileFunc.nsh"
 
 Name              "${PLUGIN_NAME} v${PLUGIN_VERSION}"
-OutFile           "OBS-Lyrics-Dock-v12.14.0-Setup.exe"
+OutFile           "OBS-Lyrics-Dock-v12.15.0-Setup.exe"
 InstallDir        "$PROGRAMFILES64\obs-studio"
 InstallDirRegKey  HKLM "Software\OBS Studio" ""
 
@@ -57,10 +57,10 @@ RequestExecutionLevel admin
 !insertmacro MUI_LANGUAGE "English"
 
 ; ── Version info ────────────────────────────────────────────
-VIProductVersion "12.14.0.0"
+VIProductVersion "12.15.0.0"
 VIAddVersionKey "ProductName"      "${PLUGIN_NAME}"
 VIAddVersionKey "ProductVersion"   "${PLUGIN_VERSION}"
-VIAddVersionKey "FileVersion"      "12.14.0.0"
+VIAddVersionKey "FileVersion"      "12.15.0.0"
 VIAddVersionKey "FileDescription"  "${PLUGIN_NAME} Installer"
 VIAddVersionKey "LegalCopyright"   "© 2026 ${PLUGIN_AUTHOR}"
 
@@ -147,4 +147,5 @@ Function .onVerifyInstDir
       "The selected folder does not contain an 'obs-plugins\64bit' subfolder.$\r$\nMake sure you are pointing at the root OBS Studio folder.$\r$\n$\r$\nDefault: C:\Program Files\obs-studio" \
       /SD IDOK
 FunctionEnd
+
 

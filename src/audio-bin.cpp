@@ -64,6 +64,11 @@ AudioBin::AudioBin(QWidget *parent) : QWidget(parent)
 
     connect(m_addBtn,  &QPushButton::clicked, this, &AudioBin::onAddAudio);
     connect(m_stopBtn, &QPushButton::clicked, this, &AudioBin::onStop);
+
+    m_pollTimer = new QTimer(this);
+    m_pollTimer->setInterval(500);
+    connect(m_pollTimer, &QTimer::timeout, this, &AudioBin::onPollTimer);
+    m_pollTimer->start();
 }
 
 // ── Persistence ───────────────────────────────────────────────────
@@ -164,9 +169,6 @@ void AudioBin::playFile(int index, bool fromRemote)
 
     const QString &path = m_files[index];
 
-    // Unload any playing video before starting audio
-    lyrics_renderer_media_clear();
-
     // Route audio through the lyrics OBS source so it appears in the OBS
     // sound meter and uses OBS audio monitoring device settings.
     lyrics_renderer_audio_push(path);
@@ -185,6 +187,19 @@ void AudioBin::playFile(int index, bool fromRemote)
     emit playbackStarted();
     if (m_wsServer && !fromRemote)
         m_wsServer->broadcastAudioBinState(index, true);
+}
+
+void AudioBin::onPollTimer()
+{
+    if (!m_playing) return;
+    // OBS_MEDIA_STATE_ENDED = 6; advance to next track when current file finishes.
+    if (lyrics_renderer_audio_get_state() == 6) {
+        int next = m_activeIndex + 1;
+        if (next < m_files.size())
+            playFile(next);
+        else
+            stopPlayback(); // end of playlist
+    }
 }
 
 void AudioBin::stopPlayback()

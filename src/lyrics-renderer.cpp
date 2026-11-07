@@ -1596,6 +1596,15 @@ int lyrics_renderer_mv_get_state()
     return -1;
 }
 
+int lyrics_renderer_audio_get_state()
+{
+    QMutexLocker lk(&s_mu);
+    for (auto *inst : s_instances)
+        if (inst->audioSrc)
+            return (int)obs_source_media_get_state(inst->audioSrc);
+    return -1;
+}
+
 bool lyrics_renderer_mv_get_time(int64_t &timeMs,int64_t &durationMs)
 {
     QMutexLocker lk(&s_mu);

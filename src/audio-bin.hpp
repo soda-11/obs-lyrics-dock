@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QStringList>
+#include <QTimer>
 
 class WebSocketServer;
 
@@ -36,6 +37,7 @@ private slots:
     void onItemActivated(QListWidgetItem *item);
     void onStop();
     void onContextMenu(const QPoint &pos);
+    void onPollTimer();
 
 private:
     void playFile(int index, bool fromRemote = false);
@@ -51,4 +53,5 @@ private:
     QStringList m_files;
     int         m_activeIndex = -1;
     bool        m_playing     = false;
+    QTimer     *m_pollTimer   = nullptr;
 };
