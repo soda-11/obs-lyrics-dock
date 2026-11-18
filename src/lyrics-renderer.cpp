@@ -62,6 +62,11 @@ static bool    s_paragraphMode       = false;
 static QString s_scripTitle;
 static QString s_scripText;
 
+// Alternate sentence color: even-numbered real lines use a different color preset.
+static bool     s_altSentenceEnabled  = false;
+static uint32_t s_altFontColor        = 0x00FFFFFFu; // OBS COLORREF: 0x00BBGGRR
+static uint32_t s_altOutlineColor     = 0x00000000u;
+
 // QR overlay: path to the 80×80 PNG, visible flag
 static bool    s_qrVisible = false;
 static QString s_qrPath;
@@ -183,6 +188,8 @@ struct LyricsInstance {
     // Scripture text children
     obs_source_t *srcScripTitle = nullptr;
     obs_source_t *srcScripText  = nullptr;
+    obs_source_t *srcScripText2 = nullptr; // even-line alternate color source
+    bool altSentenceActive      = false;
 
     // QR code overlay (image_source, 80×80 px, bottom-right)
     obs_source_t *srcQr = nullptr;
@@ -195,6 +202,10 @@ struct LyricsInstance {
     int scripHMargin = DEF_SCRIP_H_MARGIN;
     int paragraphTitleH    = DEF_SCRIP_TITLE_H;
     int paragraphHMargin   = DEF_SCRIP_H_MARGIN;
+    int paragraphTextY     = 0;
+    // Live-render cache: whichever layout (scripture or paragraph) was last pushed
+    int activeHMargin      = DEF_SCRIP_H_MARGIN;
+    int activeTextY        = DEF_SCRIP_TITLE_H;
 
     // English lyrics vertical padding (px) — shrinks the lyrics textbox
     int lyrTopPadding  = 0;
@@ -306,6 +317,27 @@ static void updateTextChildren(LyricsInstance *inst, obs_data_t *s,
     pushTextChild(inst->srcTitle,  s,"title_",  title,  halfW,        barH);
 }
 
+// Split text into odd/even real lines for alternate sentence coloring.
+// Lines with trimmed length < 3 are "blank" — they go to both halves unchanged
+// and do NOT advance the odd/even counter, preserving spacing correctly.
+static std::pair<QString,QString> splitAltLines(const QString &text)
+{
+    QStringList lines = text.split('\n');
+    QStringList odd, even;
+    int realCount = 0;
+    for (const QString &line : lines) {
+        if (line.trimmed().length() >= 3) {
+            ++realCount;
+            if (realCount % 2 == 1) { odd << line;  even << QString(); }
+            else                     { odd << QString(); even << line;  }
+        } else {
+            odd << line;
+            even << line;
+        }
+    }
+    return { odd.join('\n'), even.join('\n') };
+}
+
 // isParagraph=true → use ctw_title_/ctw_text_ prefixes and CTW layout values.
 // isParagraph=false (default) → use scr_title_/scr_text_ and Scripture layout values.
 static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
@@ -316,10 +348,31 @@ static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
     const char *textPfx  = isParagraph ? "paragraph_text_"  : "scr_text_";
     int titleH  = isParagraph ? inst->paragraphTitleH  : inst->scripTitleH;
     int hMargin = isParagraph ? inst->paragraphHMargin : inst->scripHMargin;
+    int textY   = isParagraph ? (titleH + inst->paragraphTextY) : titleH;
     int textW   = qMax(64, inst->canvasW - 2 * hMargin);
     pushTextChild(inst->srcScripTitle, s, titlePfx, title, textW, titleH);
-    pushTextChild(inst->srcScripText,  s, textPfx,  text,  textW,
-                  inst->canvasH - titleH);
+
+    if (isParagraph && s_altSentenceEnabled && inst->srcScripText2) {
+        auto [oddText, evenText] = splitAltLines(text);
+        pushTextChild(inst->srcScripText,  s, textPfx, oddText,  textW, inst->canvasH - textY);
+        // Temporarily override color fields for even-line source, then restore
+        long long origFc = obs_data_get_int(s, "paragraph_text_color");
+        long long origOc = obs_data_get_int(s, "paragraph_text_outline_color");
+        obs_data_set_int(s, "paragraph_text_color",         (long long)s_altFontColor);
+        obs_data_set_int(s, "paragraph_text_outline_color", (long long)s_altOutlineColor);
+        pushTextChild(inst->srcScripText2, s, textPfx, evenText, textW, inst->canvasH - textY);
+        obs_data_set_int(s, "paragraph_text_color",         origFc);
+        obs_data_set_int(s, "paragraph_text_outline_color", origOc);
+        inst->altSentenceActive = true;
+    } else {
+        pushTextChild(inst->srcScripText, s, textPfx, text, textW, inst->canvasH - textY);
+        if (inst->srcScripText2)
+            pushTextChild(inst->srcScripText2, s, textPfx, QString(), textW, inst->canvasH - textY);
+        inst->altSentenceActive = false;
+    }
+
+    inst->activeHMargin = hMargin;
+    inst->activeTextY   = textY;
 }
 
 // ── Chinese slide child push ──────────────────────────────────────────────────
@@ -664,6 +717,8 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
                        ? (int)obs_data_get_int(settings,"paragraph_title_h") : DEF_SCRIP_TITLE_H;
     inst->paragraphHMargin = obs_data_has_user_value(settings,"paragraph_h_margin")
                        ? (int)obs_data_get_int(settings,"paragraph_h_margin") : DEF_SCRIP_H_MARGIN;
+    inst->paragraphTextY   = obs_data_has_user_value(settings,"paragraph_text_y")
+                       ? (int)obs_data_get_int(settings,"paragraph_text_y") : 0;
 
     auto makeGdi=[](const char *name)->obs_source_t*{
         obs_data_t *d=obs_data_create();
@@ -680,6 +735,7 @@ static void *src_create(obs_data_t *settings, obs_source_t *source)
     inst->srcEnglish    = makeGdi("ch_english");
     inst->srcScripTitle = makeGdi("scripture_title");
     inst->srcScripText  = makeGdi("scripture_text");
+    inst->srcScripText2 = makeGdi("scripture_text2");
     for (int i = 0; i < MAX_CH_STRIPS; ++i)
         inst->srcChineseStrips[i] = makeGdi(
             ("ch_zh_" + std::to_string(i)).c_str());
@@ -729,6 +785,7 @@ static void src_destroy(void *data)
     obs_source_release(inst->srcEnglish);
     obs_source_release(inst->srcScripTitle);
     obs_source_release(inst->srcScripText);
+    obs_source_release(inst->srcScripText2);
     for (int i = 0; i < MAX_CH_STRIPS; ++i)
         obs_source_release(inst->srcChineseStrips[i]);
     obs_source_release(inst->srcQr);
@@ -744,6 +801,7 @@ static void src_defaults(obs_data_t *s)
     obs_data_set_default_int(s,"scrip_h_margin", DEF_SCRIP_H_MARGIN);
     obs_data_set_default_int(s,"paragraph_title_h",    DEF_SCRIP_TITLE_H);
     obs_data_set_default_int(s,"paragraph_h_margin",   DEF_SCRIP_H_MARGIN);
+    obs_data_set_default_int(s,"paragraph_text_y",     0);
     obs_data_set_default_int   (s,"lyrics_top_padding",    0);
     obs_data_set_default_int   (s,"lyrics_bottom_padding", 0);
     obs_data_set_default_int   (s,"ch_pinyin_y",           DEF_CH_PINYIN_Y);
@@ -875,6 +933,7 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"lyrics_bottom_padding", "Lyrics: bottom padding (px)",         0, 1080,1);
     obs_properties_add_int(cgrp,"paragraph_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
     obs_properties_add_int(cgrp,"paragraph_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
+    obs_properties_add_int(cgrp,"paragraph_text_y",   "Paragraph: body text top offset (px)", 0,1080,1);
 
     // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
@@ -952,6 +1011,8 @@ static void src_update(void *data, obs_data_t *settings)
                        ? (int)obs_data_get_int(settings,"paragraph_title_h") : DEF_SCRIP_TITLE_H;
     inst->paragraphHMargin = obs_data_has_user_value(settings,"paragraph_h_margin")
                        ? (int)obs_data_get_int(settings,"paragraph_h_margin") : DEF_SCRIP_H_MARGIN;
+    inst->paragraphTextY   = obs_data_has_user_value(settings,"paragraph_text_y")
+                       ? (int)obs_data_get_int(settings,"paragraph_text_y") : 0;
     QMutexLocker lk(&s_mu);
     // Re-apply whichever mode is currently active so text re-layouts
     // correctly after a canvas size / font change.
@@ -1130,15 +1191,23 @@ static void src_render(void *data, gs_effect_t *effect)
     // ── 2. Scripture title — top strip, inset by scripHMargin ──
     // Empty when in lyrics mode; non-empty only when Scripture tab is active.
     gs_matrix_push();
-    gs_matrix_translate3f((float)inst->scripHMargin, 0.f, 0.f);
+    gs_matrix_translate3f((float)inst->activeHMargin, 0.f, 0.f);
     obs_source_video_render(inst->srcScripTitle);
     gs_matrix_pop();
 
     // ── 3. Scripture text — main area below title, same x inset ─
     gs_matrix_push();
-    gs_matrix_translate3f((float)inst->scripHMargin, (float)inst->scripTitleH, 0.f);
+    gs_matrix_translate3f((float)inst->activeHMargin, (float)inst->activeTextY, 0.f);
     obs_source_video_render(inst->srcScripText);
     gs_matrix_pop();
+
+    // ── 3b. Even-line alternate color source (paragraph alt sentence only) ─
+    if (inst->altSentenceActive && inst->srcScripText2) {
+        gs_matrix_push();
+        gs_matrix_translate3f((float)inst->activeHMargin, (float)inst->activeTextY, 0.f);
+        obs_source_video_render(inst->srcScripText2);
+        gs_matrix_pop();
+    }
 
     if (inst->chineseMode) {
         // ── Chinese trilingual layout ──
@@ -1776,6 +1845,25 @@ void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outli
             updateScriptureChildren(inst,s,
                 s_scripTitle, applySuperscript(s_scripText), true);
         obs_data_release(s);
+    }
+}
+
+void lyrics_renderer_set_alt_sentence_color(bool enabled,
+                                            uint32_t fontColor,
+                                            uint32_t outlineColor)
+{
+    QMutexLocker lk(&s_mu);
+    s_altSentenceEnabled = enabled;
+    s_altFontColor       = fontColor  & 0x00FFFFFFu;
+    s_altOutlineColor    = outlineColor & 0x00FFFFFFu;
+    // Re-push current content so the split/merge takes effect immediately.
+    if (s_scriptureMode && s_paragraphMode) {
+        for (auto *inst : s_instances) {
+            obs_data_t *s = obs_source_get_settings(inst->self);
+            updateScriptureChildren(inst, s,
+                s_scripTitle, applySuperscript(s_scripText), true);
+            obs_data_release(s);
+        }
     }
 }
 

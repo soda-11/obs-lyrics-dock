@@ -1,10 +1,10 @@
-// ppt-tab.cpp  v2.0
-// Presentation tab — three capture sections (PowerPoint, Google Slides, Canva).
-// Each section lets the user pick any visible window as the capture target.
-// The plugin creates an OBS window_capture source per enabled section so the
-// user can add "OBS Lyrics - PowerPoint" (etc.) to their scene.
-// Navigation: PowerPoint uses COM automation; Google Slides and Canva use
-// keystroke injection to the selected window handle.
+// ppt-tab.cpp  v3.0
+// Single-source presentation tab.  One OBS window_capture source captures any
+// visible window.  "PowerPoint source" checkbox enables COM automation for slide
+// navigation and position tracking; unchecked = keystroke navigation (works for
+// Google Slides, Canva, PDF viewers, etc.).
+// Auto-shows when a Presentation service order is selected in Col 1.
+// "Blank" button hides the source without leaving presentation mode.
 
 #include "ppt-tab.hpp"
 
@@ -19,7 +19,7 @@
 #include <psapi.h>              // QueryFullProcessImageNameW, EnumProcesses
 #include <obs-frontend-api.h>   // obs_frontend_get_current_scene
 
-// ── Shared button style ───────────────────────────────────────
+// ── Shared button styles ──────────────────────────────────────
 
 static const char *kBtnStyle =
     "QPushButton{background:#1a3a5c;color:#4da6ff;border:1px solid #2a5a8c;"
@@ -27,15 +27,25 @@ static const char *kBtnStyle =
     "QPushButton:hover{background:#254e7a;}"
     "QPushButton:disabled{background:#1a1a1a;color:#444;border-color:#333;}";
 
-static const char *kShowActiveStyle =
-    "QPushButton{background:#1a4a1a;color:#66cc66;"
-    "border:1px solid #2a7a2a;border-radius:4px;font-weight:bold;}"
-    "QPushButton:hover{background:#256025;}";
+static const char *kBlankActiveStyle =
+    "QPushButton{background:#3a1a1a;color:#ff6666;"
+    "border:1px solid #7a2a2a;border-radius:4px;font-weight:bold;}"
+    "QPushButton:hover{background:#4a2020;}";
 
-static const char *kShowInactiveStyle =
-    "QPushButton{background:#1a3a5c;color:#4da6ff;border:1px solid #2a5a8c;"
+static const char *kConnectStyle =
+    "QPushButton{background:#1e2a1e;color:#66aa66;border:1px solid #336633;"
+    "border-radius:4px;font-weight:bold;font-size:10px;padding:4px 8px;}"
+    "QPushButton:hover{background:#263326;}";
+
+static const char *kConnectedStyle =
+    "QPushButton{background:#1a3a1a;color:#66ff66;border:1px solid #33aa33;"
+    "border-radius:4px;font-weight:bold;font-size:10px;padding:4px 8px;}"
+    "QPushButton:hover{background:#204020;}";
+
+static const char *kBlankInactiveStyle =
+    "QPushButton{background:#1e1e28;color:#aaa;border:1px solid #444;"
     "border-radius:4px;font-weight:bold;}"
-    "QPushButton:hover{background:#254e7a;}"
+    "QPushButton:hover{background:#2a2a38;color:#eee;}"
     "QPushButton:disabled{background:#1a1a1a;color:#444;border-color:#333;}";
 
 static const char *kComboStyle =
@@ -118,11 +128,9 @@ static bool isPowerPointRunning()
     return false;
 }
 
-// Returns the COM IDispatch* for the first PowerPoint presentation that
-// currently has a SlideShowWindow open, or nullptr.  Caller must Release().
-static IDispatch *getPptActiveView()
+// Returns the PowerPoint Application IDispatch*, or nullptr.  Caller must Release().
+static IDispatch *getPptApp()
 {
-    if (!isPowerPointRunning()) return nullptr;
     CLSID clsid = {};
     if (FAILED(CLSIDFromProgID(L"PowerPoint.Application", &clsid))) return nullptr;
     IUnknown *unk = nullptr;
@@ -130,7 +138,16 @@ static IDispatch *getPptActiveView()
     IDispatch *app = nullptr;
     HRESULT hr = unk->QueryInterface(IID_IDispatch, (void **)&app);
     unk->Release();
-    if (FAILED(hr) || !app) return nullptr;
+    if (FAILED(hr)) return nullptr;
+    return app;
+}
+
+// Returns the COM IDispatch* for the first PowerPoint presentation that
+// currently has a SlideShowWindow open, or nullptr.  Caller must Release().
+static IDispatch *getPptActiveView()
+{
+    IDispatch *app = getPptApp();
+    if (!app) return nullptr;
     IDispatch *presColl = pptObj(app, L"Presentations");
     app->Release();
     if (!presColl) return nullptr;
@@ -145,9 +162,9 @@ static IDispatch *getPptActiveView()
         VARIANT vArg; VariantInit(&vArg); V_VT(&vArg) = VT_I4; V_I4(&vArg) = i;
         DISPPARAMS dp{ &vArg, nullptr, 1, 0 };
         VARIANT vRes; VariantInit(&vRes);
-        hr = presColl->Invoke(idItem, IID_NULL, LOCALE_USER_DEFAULT,
-                              DISPATCH_METHOD | DISPATCH_PROPERTYGET,
-                              &dp, &vRes, nullptr, nullptr);
+        HRESULT hr = presColl->Invoke(idItem, IID_NULL, LOCALE_USER_DEFAULT,
+                                      DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+                                      &dp, &vRes, nullptr, nullptr);
         if (SUCCEEDED(hr) && V_VT(&vRes) == VT_DISPATCH && V_DISPATCH(&vRes)) {
             IDispatch *pres = V_DISPATCH(&vRes); V_VT(&vRes) = VT_EMPTY;
             VariantClear(&vRes);
@@ -200,22 +217,6 @@ static BOOL CALLBACK enumWinCb(HWND hwnd, LPARAM lp)
     return TRUE;
 }
 
-// ── OBS source names per section ─────────────────────────────
-
-static const char *kSourceName[3] = {
-    "SSO - PowerPoint",
-    "SSO - Google Slides",
-    "SSO - Canva"
-};
-
-// Legacy names from before the SSO v2 rename — checked as fallback so
-// existing OBS scenes keep working without manual source replacement.
-static const char *kSourceNameLegacy[3] = {
-    "OBS Lyrics - PowerPoint",
-    "OBS Lyrics - Google Slides",
-    "OBS Lyrics - Canva"
-};
-
 // ══════════════════════════════════════════════════════════════
 // PptTab
 // ══════════════════════════════════════════════════════════════
@@ -231,105 +232,76 @@ PptTab::PptTab(QWidget *parent) : QWidget(parent)
 
 PptTab::~PptTab()
 {
-    for (int t = 0; t < kTypes; ++t)
-        releaseCaptureSource(t);
+    releaseCaptureSource();
 }
 
 // ── UI construction ───────────────────────────────────────────
 
 void PptTab::buildUi()
 {
-    static const char *kLabels[kTypes] = {
-        "📊  PowerPoint",
-        "🌐  Google Slides",
-        "🎨  Canva"
-    };
-    static const char *kPlaceholder[kTypes] = {
-        "Select PowerPoint window…",
-        "Select browser window with Google Slides…",
-        "Select browser window with Canva…"
-    };
-
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(10, 10, 10, 10);
     root->setSpacing(8);
 
-    for (int t = 0; t < kTypes; ++t) {
-        PresSection &sec = m_sections[t];
-
-        sec.group = new QGroupBox(kLabels[t]);
-        sec.group->setCheckable(true);
-        sec.group->setChecked(false);
-        sec.group->setStyleSheet(
-            "QGroupBox{color:#ccc;border:1px solid #444;border-radius:5px;"
-            "margin-top:6px;padding-top:4px;font-weight:bold;}"
-            "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
-            "QGroupBox::indicator{width:14px;height:14px;}"
-            "QGroupBox::indicator:unchecked{border:1px solid #555;border-radius:3px;"
-            "background:#222;}"
-            "QGroupBox::indicator:checked{border:1px solid #4da6ff;border-radius:3px;"
-            "background:#1a3a5c;}");
-
-        auto *gl = new QVBoxLayout(sec.group);
-        gl->setContentsMargins(8, 6, 8, 8);
-        gl->setSpacing(6);
-
-        // Window selector row
-        auto *winRow = new QHBoxLayout;
-        sec.winCombo = new QComboBox;
-        sec.winCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        sec.winCombo->setStyleSheet(kComboStyle);
-        sec.winCombo->addItem(kPlaceholder[t]);
-
-        sec.scanBtn = new QPushButton("⟳ Scan");
-        sec.scanBtn->setFixedWidth(72);
-        sec.scanBtn->setStyleSheet(kBtnStyle);
-
-        winRow->addWidget(sec.winCombo, 1);
-        winRow->addWidget(sec.scanBtn);
-        gl->addLayout(winRow);
-
-        // Info + show button row
-        auto *btnRow = new QHBoxLayout;
-        QLabel *srcLbl = new QLabel(
-            QString("OBS source: <span style='color:#4da6ff;'>%1</span>")
-            .arg(kSourceName[t]));
-        srcLbl->setStyleSheet("color:#666;font-size:10px;");
-        srcLbl->setTextFormat(Qt::RichText);
-
-        sec.showBtn = new QPushButton("▶ Show Slides");
-        sec.showBtn->setFixedWidth(120);
-        sec.showBtn->setStyleSheet(kShowInactiveStyle);
-
-        btnRow->addWidget(srcLbl, 1);
-        btnRow->addWidget(sec.showBtn);
-        gl->addLayout(btnRow);
-
-        root->addWidget(sec.group);
-
-        // Connect signals — capture t by value
-        const int ct = t;
-        connect(sec.scanBtn, &QPushButton::clicked, this,
-                [this, ct]() { onScanWindows(ct); });
-        connect(sec.showBtn, &QPushButton::clicked, this,
-                [this, ct]() { onShowSlides(ct); });
-
-        // When the group is unchecked, deactivate if it was showing
-        connect(sec.group, &QGroupBox::toggled, this, [this, ct](bool on) {
-            if (!on && m_activeType == ct)
-                deactivatePresentation();
-            if (!on)
-                releaseCaptureSource(ct);
-            emit typeEnabledChanged(ct, on);
-        });
-    }
-
-    // ── Navigation ────────────────────────────────────────────
-    auto *navGroup  = new QGroupBox("Navigation");
-    navGroup->setStyleSheet(
+    // ── Source group ─────────────────────────────────────────
+    auto *srcGroup = new QGroupBox("Presentation Source");
+    srcGroup->setStyleSheet(
         "QGroupBox{color:#ccc;border:1px solid #444;border-radius:5px;"
         "margin-top:6px;padding-top:4px;font-weight:bold;}"
         "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}");
+    auto *srcLayout = new QVBoxLayout(srcGroup);
+    srcLayout->setContentsMargins(8, 6, 8, 8);
+    srcLayout->setSpacing(6);
+
+    // Window selector row
+    auto *winRow = new QHBoxLayout;
+    m_winCombo = new QComboBox;
+    m_winCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_winCombo->setStyleSheet(kComboStyle);
+    m_winCombo->addItem("(Select window…)");
+
+    m_scanBtn = new QPushButton("⟳ Scan");
+    m_scanBtn->setFixedWidth(72);
+    m_scanBtn->setStyleSheet(kBtnStyle);
+    winRow->addWidget(m_winCombo, 1);
+    winRow->addWidget(m_scanBtn);
+    srcLayout->addLayout(winRow);
+
+    // PowerPoint COM connect button
+    m_pptConnectBtn = new QPushButton("Connect PowerPoint COM");
+    m_pptConnectBtn->setToolTip(
+        "Click to connect to a running PowerPoint slideshow via COM.\n"
+        "Enables slide counter, Go-to, and COM-based Prev/Next.\n"
+        "PowerPoint must be running (press F5 for slideshow mode).");
+    srcLayout->addWidget(m_pptConnectBtn);
+
+    // OBS source name hint
+    auto *hintLbl = new QLabel(
+        QString("OBS source: <span style='color:#4da6ff;'>%1</span>  "
+                "— add this source to your OBS scene").arg(kSourceName));
+    hintLbl->setStyleSheet("color:#555;font-size:9px;");
+    hintLbl->setTextFormat(Qt::RichText);
+    srcLayout->addWidget(hintLbl);
+
+    root->addWidget(srcGroup);
+
+    // ── Controls ─────────────────────────────────────────────
+    auto *ctrlGroup = new QGroupBox("Controls");
+    ctrlGroup->setStyleSheet(srcGroup->styleSheet());
+    auto *ctrlLayout = new QHBoxLayout(ctrlGroup);
+    ctrlLayout->setContentsMargins(8, 6, 8, 8);
+
+    m_blankBtn = new QPushButton("■  Blank");
+    m_blankBtn->setEnabled(false);
+    m_blankBtn->setStyleSheet(kBlankInactiveStyle);
+    ctrlLayout->addWidget(m_blankBtn);
+    ctrlLayout->addStretch();
+
+    root->addWidget(ctrlGroup);
+
+    // ── Navigation ────────────────────────────────────────────
+    auto *navGroup = new QGroupBox("Navigation");
+    navGroup->setStyleSheet(srcGroup->styleSheet());
     auto *navLayout = new QVBoxLayout(navGroup);
     navLayout->setContentsMargins(8, 6, 8, 8);
     navLayout->setSpacing(6);
@@ -388,122 +360,312 @@ void PptTab::buildUi()
     root->addWidget(navGroup);
     root->addStretch();
 
-    connect(m_prevBtn, &QPushButton::clicked, this, &PptTab::onPrev);
-    connect(m_nextBtn, &QPushButton::clicked, this, &PptTab::onNext);
-    connect(m_gotoBtn, &QPushButton::clicked, this, &PptTab::onGoto);
+    connect(m_scanBtn,       &QPushButton::clicked, this, &PptTab::onScanWindows);
+    connect(m_pptConnectBtn, &QPushButton::clicked, this, &PptTab::onConnectPpt);
+    connect(m_blankBtn,      &QPushButton::clicked, this, &PptTab::onBlank);
+
+    updateConnectBtnStyle();
+    connect(m_winCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx){
+        if (idx > 0 && idx - 1 < m_windows.size()) {
+            emit windowExeChanged(m_windows[idx - 1].title);
+            // Immediately update the OBS source so the preview refreshes without
+            // requiring the user to click away and back.
+            if (m_active) updateCaptureSource();
+        }
+    });
+    connect(m_prevBtn,  &QPushButton::clicked, this, &PptTab::onPrev);
+    connect(m_nextBtn,  &QPushButton::clicked, this, &PptTab::onNext);
+    connect(m_gotoBtn,  &QPushButton::clicked, this, &PptTab::onGoto);
 }
 
 // ── Window scanning ───────────────────────────────────────────
 
-void PptTab::scanWindows(int type)
+void PptTab::scanWindows()
 {
-    PresSection &sec = m_sections[type];
     QList<WinInfo> wins;
     EnumWinCtx ctx{ &wins };
     EnumWindows(enumWinCb, reinterpret_cast<LPARAM>(&ctx));
-    sec.windows = wins;
+    m_windows = wins;
 
-    QString prevText = sec.winCombo->currentIndex() > 0
-                       ? sec.winCombo->currentText() : QString();
-    QSignalBlocker blk(sec.winCombo);
-    sec.winCombo->clear();
-    sec.winCombo->addItem("(Select window…)");
-    for (const auto &wi : sec.windows) {
+    QString prevText = m_winCombo->currentIndex() > 0
+                       ? m_winCombo->currentText() : QString();
+    QSignalBlocker blk(m_winCombo);
+    m_winCombo->clear();
+    m_winCombo->addItem("(Select window…)");
+    for (const auto &wi : m_windows) {
         QString label = wi.title;
-        if (!wi.exe.isEmpty())
-            label += "  —  " + wi.exe;
-        sec.winCombo->addItem(label);
-        sec.winCombo->setItemData(sec.winCombo->count() - 1,
-                                  wi.title, Qt::ToolTipRole);
+        if (!wi.exe.isEmpty()) label += "  —  " + wi.exe;
+        m_winCombo->addItem(label);
+        m_winCombo->setItemData(m_winCombo->count() - 1, wi.title, Qt::ToolTipRole);
     }
     if (!prevText.isEmpty()) {
-        int idx = sec.winCombo->findText(prevText);
-        if (idx >= 0) sec.winCombo->setCurrentIndex(idx);
+        int idx = m_winCombo->findText(prevText);
+        if (idx >= 0) m_winCombo->setCurrentIndex(idx);
     }
-    autoSelectWindow(type); // auto-pick if still on placeholder
+    autoSelectWindow({});
 }
 
-void PptTab::onScanWindows(int type) { scanWindows(type); }
+void PptTab::onScanWindows() { scanWindows(); }
 
-void PptTab::autoSelectWindow(int type)
+void PptTab::updateConnectBtnStyle()
 {
-    PresSection &sec = m_sections[type];
-    if (sec.winCombo->currentIndex() > 0) return; // already has a selection
+    if (!m_pptConnectBtn) return;
+    if (m_pptConnected) {
+        m_pptConnectBtn->setText("✓ PowerPoint COM Connected  (click to disconnect)");
+        m_pptConnectBtn->setStyleSheet(kConnectedStyle);
+    } else {
+        m_pptConnectBtn->setText("Connect PowerPoint COM");
+        m_pptConnectBtn->setStyleSheet(kConnectStyle);
+    }
+}
 
+void PptTab::onConnectPpt()
+{
+    if (m_pptConnected) {
+        m_pptConnected = false;
+        updateConnectBtnStyle();
+        m_curSlide = 0; m_totSlides = 0;
+        m_slideCtr->setText("— / —");
+        m_navStatusLbl->setText("PowerPoint COM disconnected.");
+        updateNavUi();
+        return;
+    }
+
+    // Validate: selected window should be POWERPNT.EXE
+    int idx = m_winCombo->currentIndex() - 1;
+    if (idx >= 0 && idx < m_windows.size()) {
+        const QString &exe = m_windows[idx].exe;
+        if (!exe.isEmpty() && exe.compare("POWERPNT.EXE", Qt::CaseInsensitive) != 0) {
+            m_navStatusLbl->setText(
+                QString("<span style='color:#ff8888;'>Selected window is not PowerPoint "
+                        "(%1). Select a POWERPNT.EXE window first.</span>").arg(exe));
+            m_navStatusLbl->setTextFormat(Qt::RichText);
+            return;
+        }
+    }
+
+    // Step 2: ensure this thread is COM-initialized (STA preferred for Office apps)
+    HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    // S_OK = initialized now; S_FALSE = already init'd as STA; RPC_E_CHANGED_MODE = MTA
+    bool coWasInited = (hrCo == RPC_E_CHANGED_MODE || hrCo == S_FALSE);
+    bool coInitedHere = SUCCEEDED(hrCo) && hrCo != S_FALSE;
+
+    // Step 3: get CLSID for PowerPoint.Application
+    CLSID clsid = {};
+    HRESULT hr = CLSIDFromProgID(L"PowerPoint.Application", &clsid);
+    if (FAILED(hr)) {
+        if (coInitedHere) CoUninitialize();
+        m_navStatusLbl->setText(
+            QString("<span style='color:#ff8888;'>Step 3 FAIL: CLSIDFromProgID hr=0x%1 "
+                    "(PowerPoint not installed?)</span>").arg((uint)hr, 8, 16, QChar('0')));
+        m_navStatusLbl->setTextFormat(Qt::RichText);
+        return;
+    }
+
+    // Step 4: get running instance from ROT
+    IUnknown *unk = nullptr;
+    hr = GetActiveObject(clsid, nullptr, &unk);
+    if (FAILED(hr) || !unk) {
+        if (coInitedHere) CoUninitialize();
+        QString hint;
+        if (hr == 0x800401E3L /*MK_E_UNAVAILABLE*/)
+            hint = " — MK_E_UNAVAILABLE: ROT entry not found. "
+                   "Thread apartment mismatch (MTA vs STA) or PPT not registered.";
+        else if (hrCo == RPC_E_CHANGED_MODE)
+            hint = " — thread is MTA; try restarting OBS without admin elevation.";
+        m_navStatusLbl->setText(
+            QString("<span style='color:#ff8888;'>Step 4 FAIL: GetActiveObject hr=0x%1%2</span>")
+            .arg((uint)hr, 8, 16, QChar('0')).arg(hint));
+        m_navStatusLbl->setTextFormat(Qt::RichText);
+        return;
+    }
+
+    // Step 5: QI to IDispatch
+    IDispatch *app = nullptr;
+    hr = unk->QueryInterface(IID_IDispatch, (void **)&app);
+    unk->Release();
+    if (FAILED(hr) || !app) {
+        if (coInitedHere) CoUninitialize();
+        m_navStatusLbl->setText(
+            QString("<span style='color:#ff8888;'>Step 5 FAIL: QueryInterface IDispatch hr=0x%1</span>")
+            .arg((uint)hr, 8, 16, QChar('0')));
+        m_navStatusLbl->setTextFormat(Qt::RichText);
+        return;
+    }
+    app->Release();
+    if (coInitedHere) CoUninitialize();
+
+    // Success
+    m_pptConnected = true;
+    updateConnectBtnStyle();
+    updateNavUi();
+    m_navStatusLbl->setText(
+        QString("<span style='color:#66ff66;'>PowerPoint COM connected "
+                "(CoInit hr=0x%1). Slide counter updates every 500 ms.</span>")
+        .arg((uint)hrCo, 8, 16, QChar('0')));
+    m_navStatusLbl->setTextFormat(Qt::RichText);
+}
+
+void PptTab::autoSelectWindow(const QString &preferredExe)
+{
+    // When a preferred exe is set (switching to a saved presentation item) we
+    // must force-select the matching window even if the combo already has a
+    // selection from a different item — otherwise both items share one window.
+    if (m_winCombo->currentIndex() > 0 && preferredExe.isEmpty()) return;
+
+    // Priority 1: match by exact window title (unique even when multiple windows share an exe)
+    if (!preferredExe.isEmpty()) {
+        for (int i = 0; i < m_windows.size(); ++i) {
+            if (m_windows[i].title == preferredExe) {
+                m_winCombo->setCurrentIndex(i + 1);
+                return;
+            }
+        }
+        // Fall back to exe match for items saved before v12.23.0
+        for (int i = 0; i < m_windows.size(); ++i) {
+            if (m_windows[i].exe.compare(preferredExe, Qt::CaseInsensitive) == 0) {
+                m_winCombo->setCurrentIndex(i + 1);
+                return;
+            }
+        }
+    }
+
+    // Priority 2: PPT slide show window / exe, or any non-OBS window
+    bool preferPpt = m_pptConnected;
     int bestIdx = -1;
-    for (int i = 0; i < sec.windows.size(); ++i) {
-        const WinInfo &wi = sec.windows[i];
-        if (type == 0) {
-            // Prefer the actual slide show window (title starts with
-            // "PowerPoint Slide Show") over any other POWERPNT.EXE window.
+    for (int i = 0; i < m_windows.size(); ++i) {
+        const WinInfo &wi = m_windows[i];
+        if (preferPpt) {
             if (wi.title.startsWith("PowerPoint Slide Show", Qt::CaseInsensitive)) {
-                bestIdx = i;
-                break; // best possible match — stop
+                bestIdx = i; break;
             }
             if (wi.exe.compare("POWERPNT.EXE", Qt::CaseInsensitive) == 0 && bestIdx < 0)
-                bestIdx = i; // fallback: any PPT window
-        } else if (type == 1) {
-            if (wi.title.contains("Google Slides", Qt::CaseInsensitive)) { bestIdx = i; break; }
-        } else if (type == 2) {
-            if (wi.title.contains("Canva", Qt::CaseInsensitive)) { bestIdx = i; break; }
+                bestIdx = i;
+        } else {
+            if (!wi.exe.contains("obs", Qt::CaseInsensitive) && bestIdx < 0)
+                bestIdx = i;
         }
     }
     if (bestIdx >= 0)
-        sec.winCombo->setCurrentIndex(bestIdx + 1); // +1 for placeholder row
+        m_winCombo->setCurrentIndex(bestIdx + 1);
 }
 
 // ── Activate / deactivate ─────────────────────────────────────
 
-void PptTab::activatePresentation(int type)
+void PptTab::activatePresentation()
 {
-    int prev = m_activeType;
-    m_activeType = type;
-    updateCaptureSource(type); // create/update the OBS source
-    ensureInScene(type);       // add to current OBS scene (auto-hides others)
-    if (prev >= 0 && prev != type)
-        hideFromScene(prev);   // explicitly hide the previous type
-    updateShowBtnStyles();
+    m_active = true;
+    m_blank  = false;
+    updateCaptureSource();
+    ensureInScene();
+    updateBlankBtnStyle();
     updateNavUi();
-    emit showSlidesRequested(type);
+    emit showSlidesRequested(0);
 }
 
 void PptTab::deactivatePresentation()
 {
-    int prev = m_activeType;
-    m_activeType = -1;
-    m_curSlide   = 0;
-    m_totSlides  = 0;
-    if (prev >= 0) hideFromScene(prev);
-    updateShowBtnStyles();
+    m_active    = false;
+    m_blank     = false;
+    m_curSlide  = 0;
+    m_totSlides = 0;
+    hideFromScene();
+    updateBlankBtnStyle();
     updateNavUi();
     emit showSlidesRequested(-1);
 }
 
-void PptTab::onShowSlides(int type)
+void PptTab::onBlank()
 {
-    if (!m_sections[type].group->isChecked()) return;
-
-    if (m_activeType == type) {
-        deactivatePresentation();
+    if (!m_active) return;
+    m_blank = !m_blank;
+    if (m_blank) {
+        hideFromScene();
     } else {
-        activatePresentation(type);
+        // hideFromScene() cleared the window property; restore it before showing.
+        updateCaptureSource();
+        ensureInScene();
     }
+    updateBlankBtnStyle();
+    updateNavUi();
+    // Emit -1 when blanked (OBS source hidden), 0 when un-blanked (source visible).
+    emit showSlidesRequested(m_blank ? -1 : 0);
 }
+
+void PptTab::releaseCapture()
+{
+    // Drop our OBS source ref without touching the scene — scene may already be
+    // invalid during SCENE_COLLECTION_CLEANUP.  Resets state so requestShow()
+    // re-creates everything cleanly on the next scene collection.
+    m_active = false;
+    m_blank  = false;
+    releaseCaptureSource(); // obs_source_release(m_capture); m_capture = nullptr
+    updateBlankBtnStyle();
+    updateNavUi();
+}
+
+void PptTab::restoreActiveUi()
+{
+    // Called on startup when the saved active item is a Presentation.
+    // Sets m_active = true so buttons are enabled, but does NOT touch OBS
+    // sources — those are initialised on the first real requestShow() call.
+    m_active = true;
+    m_blank  = false;
+    updateBlankBtnStyle();
+    updateNavUi();
+}
+
+// ── Remote-triggered activation ───────────────────────────────
+
+void PptTab::requestShow(int type, const QString &windowExe)
+{
+    if (type < 0) {
+        if (m_active) deactivatePresentation();
+        return;
+    }
+    // Scan windows; if windowExe is set, prefer that exe for auto-selection
+    if (m_winCombo->currentIndex() <= 0 || !windowExe.isEmpty()) {
+        // Re-scan so we can try to match the preferred exe
+        QList<WinInfo> wins;
+        EnumWinCtx ctx{ &wins };
+        EnumWindows(enumWinCb, reinterpret_cast<LPARAM>(&ctx));
+        m_windows = wins;
+
+        QString prevText = m_winCombo->currentIndex() > 0
+                           ? m_winCombo->currentText() : QString();
+        QSignalBlocker blk(m_winCombo);
+        m_winCombo->clear();
+        m_winCombo->addItem("(Select window…)");
+        for (const auto &wi : m_windows) {
+            QString label = wi.title;
+            if (!wi.exe.isEmpty()) label += "  —  " + wi.exe;
+            m_winCombo->addItem(label);
+            m_winCombo->setItemData(m_winCombo->count() - 1, wi.title, Qt::ToolTipRole);
+        }
+        // Restore previous selection if still present; otherwise auto-select
+        if (!prevText.isEmpty()) {
+            int idx = m_winCombo->findText(prevText);
+            if (idx >= 0) m_winCombo->setCurrentIndex(idx);
+        }
+        autoSelectWindow(windowExe);
+    }
+
+    activatePresentation(); // always clears blank state and shows
+}
+
 
 // ── OBS capture source management ────────────────────────────
 
-HWND PptTab::selectedHwnd(int type) const
+HWND PptTab::selectedHwnd() const
 {
-    const PresSection &sec = m_sections[type];
-    int idx = sec.winCombo->currentIndex() - 1; // -1 for placeholder
-    if (idx < 0 || idx >= sec.windows.size()) return nullptr;
-    return sec.windows[idx].hwnd;
+    int idx = m_winCombo->currentIndex() - 1; // -1 for placeholder
+    if (idx < 0 || idx >= m_windows.size()) return nullptr;
+    return m_windows[idx].hwnd;
 }
 
-void PptTab::updateCaptureSource(int type)
+void PptTab::updateCaptureSource()
 {
-    PresSection &sec = m_sections[type];
-    HWND hwnd = selectedHwnd(type);
+    HWND hwnd = selectedHwnd();
     if (!hwnd || !IsWindow(hwnd)) return;
 
     wchar_t title[512] = {}, cls[256] = {};
@@ -529,74 +691,52 @@ void PptTab::updateCaptureSource(int type)
         .arg(QString::fromWCharArray(cls))
         .arg(exeName);
 
-    if (!sec.capture) {
-        // Reuse an existing source if OBS already has one with our name.
-        // Without this, obs_source_create would auto-rename duplicates
-        // ("PowerPoint 2", "PowerPoint 3", ...) causing one new source to
-        // accumulate in the scene every session, eventually crashing OBS
-        // at shutdown with a use-after-free in obs_sceneitem_remove_internal.
-        sec.capture = obs_get_source_by_name(kSourceName[type]);
-        if (!sec.capture)
-            sec.capture = obs_get_source_by_name(kSourceNameLegacy[type]);
-        if (!sec.capture) {
+    if (!m_capture) {
+        // Reuse any existing source by name to avoid duplicate accumulation
+        // in the OBS scene across sessions.
+        m_capture = obs_get_source_by_name(kSourceName);
+        if (!m_capture)
+            m_capture = obs_get_source_by_name(kSourceNameNew);
+        if (!m_capture) {
             obs_data_t *s = obs_data_create();
             obs_data_set_string(s, "window", winId.toUtf8().constData());
             obs_data_set_int(s, "method", 2); // DXGI desktop duplication
             obs_data_set_bool(s, "cursor", false);
-            sec.capture = obs_source_create("window_capture",
-                                            kSourceName[type], s, nullptr);
+            m_capture = obs_source_create("window_capture", kSourceName, s, nullptr);
             obs_data_release(s);
         }
     }
-    if (sec.capture) {
-        obs_data_t *s = obs_source_get_settings(sec.capture);
+    if (m_capture) {
+        obs_data_t *s = obs_source_get_settings(m_capture);
         obs_data_set_string(s, "window", winId.toUtf8().constData());
-        obs_source_update(sec.capture, s);
+        obs_source_update(m_capture, s);
         obs_data_release(s);
     }
 }
 
-void PptTab::releaseCaptureSource(int type)
+void PptTab::releaseCaptureSource()
 {
-    PresSection &sec = m_sections[type];
-    if (sec.capture) {
-        obs_source_release(sec.capture);
-        sec.capture = nullptr;
+    if (m_capture) {
+        obs_source_release(m_capture);
+        m_capture = nullptr;
     }
 }
 
 // ── OBS scene integration ─────────────────────────────────────
-// Adds the capture source to the current OBS scene (if not already there),
-// scales it to fill the canvas, pushes it to the bottom, and hides every
-// other presentation capture source in that scene.
 
-void PptTab::ensureInScene(int type)
+void PptTab::ensureInScene()
 {
-    obs_source_t *cap = m_sections[type].capture;
-    if (!cap) return;
+    if (!m_capture) return;
 
     obs_source_t *sceneSrc = obs_frontend_get_current_scene();
     if (!sceneSrc) return;
-    obs_scene_t *scene = obs_scene_from_source(sceneSrc); // weak ref
+    obs_scene_t *scene = obs_scene_from_source(sceneSrc);
 
-    // Hide every other presentation source and stop their DXGI acquisition
-    for (int t = 0; t < kTypes; ++t) {
-        if (t == type || !m_sections[t].capture) continue;
-        obs_data_t *sd = obs_source_get_settings(m_sections[t].capture);
-        obs_data_set_string(sd, "window", "");
-        obs_source_update(m_sections[t].capture, sd);
-        obs_data_release(sd);
-        obs_sceneitem_t *si = obs_scene_find_source(
-            scene, obs_source_get_name(m_sections[t].capture));
-        if (si) obs_sceneitem_set_visible(si, false);
-    }
-
-    // Find or add our source
-    obs_sceneitem_t *item = obs_scene_find_source(scene, obs_source_get_name(cap));
+    obs_sceneitem_t *item = obs_scene_find_source(scene, obs_source_get_name(m_capture));
     if (item) {
         obs_sceneitem_set_visible(item, true);
     } else {
-        item = obs_scene_add(scene, cap);
+        item = obs_scene_add(scene, m_capture);
         if (item) {
             obs_video_info ovi = {};
             obs_get_video_info(&ovi);
@@ -624,104 +764,104 @@ void PptTab::ensureInScene(int type)
     obs_source_release(sceneSrc);
 }
 
-void PptTab::hideFromScene(int type)
+void PptTab::hideFromScene()
 {
-    obs_source_t *cap = m_sections[type].capture;
-    if (!cap) return;
+    if (!m_capture) return;
 
     // Clear the window target so DXGI releases the desktop capture handle.
-    // Without this the source keeps capturing even while the scene item is
-    // hidden; two sources on the same monitor simultaneously hold DXGI
-    // resources and cause device-lost crashes in OBS.
-    obs_data_t *s = obs_source_get_settings(cap);
+    obs_data_t *s = obs_source_get_settings(m_capture);
     obs_data_set_string(s, "window", "");
-    obs_source_update(cap, s);
+    obs_source_update(m_capture, s);
     obs_data_release(s);
 
     obs_source_t *sceneSrc = obs_frontend_get_current_scene();
     if (!sceneSrc) return;
     obs_scene_t *scene = obs_scene_from_source(sceneSrc);
-    obs_sceneitem_t *item = obs_scene_find_source(scene, obs_source_get_name(cap));
+    obs_sceneitem_t *item = obs_scene_find_source(scene, obs_source_get_name(m_capture));
     if (item) obs_sceneitem_set_visible(item, false);
     obs_source_release(sceneSrc);
 }
 
-bool PptTab::isTypeEnabled(int type) const
+// ── Legacy source cleanup (fixes shutdown crash) ──────────────
+// Hides and clears window property on old 3-source sources so they
+// no longer hold DXGI resources during OBS shutdown.
+
+void PptTab::cleanupLegacySources()
 {
-    if (type < 0 || type >= kTypes) return false;
-    return m_sections[type].group && m_sections[type].group->isChecked();
+    static const char *kLegacy[] = {
+        "SSO - Google Slides",
+        "SSO - Canva",
+        "OBS Lyrics - Google Slides",
+        "OBS Lyrics - Canva",
+        "OBS Lyrics - PowerPoint",
+    };
+
+    obs_source_t *sceneSrc = obs_frontend_get_current_scene();
+    if (!sceneSrc) return;
+    obs_scene_t *scene = obs_scene_from_source(sceneSrc);
+
+    for (const char *name : kLegacy) {
+        obs_source_t *src = obs_get_source_by_name(name);
+        if (!src) continue;
+
+        // Clear DXGI capture to release graphics resources
+        obs_data_t *sd = obs_source_get_settings(src);
+        obs_data_set_string(sd, "window", "");
+        obs_source_update(src, sd);
+        obs_data_release(sd);
+
+        // Hide in current scene
+        obs_sceneitem_t *item = obs_scene_find_source(scene, name);
+        if (item) obs_sceneitem_set_visible(item, false);
+
+        obs_source_release(src);
+    }
+
+    obs_source_release(sceneSrc);
 }
 
-// ── Remote-triggered activation ───────────────────────────────
-
-void PptTab::requestShow(int type)
-{
-    if (type < 0) {
-        if (m_activeType >= 0) deactivatePresentation();
-        return;
-    }
-    if (type >= kTypes) return;
-
-    if (m_activeType == type) {
-        deactivatePresentation();
-        return;
-    }
-
-    // Auto-enable the section if needed
-    if (!m_sections[type].group->isChecked())
-        m_sections[type].group->setChecked(true);
-
-    // If no window is selected try an auto-scan so there's something in the list
-    if (m_sections[type].winCombo->currentIndex() <= 0)
-        scanWindows(type);
-
-    activatePresentation(type);
-}
-
-// ── Navigation UI helpers ─────────────────────────────────────
+// ── UI update helpers ─────────────────────────────────────────
 
 void PptTab::updateNavUi()
 {
-    bool active = (m_activeType >= 0);
-    bool isPpt  = (m_activeType == 0);
+    bool canNav = (m_active && !m_blank) || m_pptConnected;
+    bool isPpt  = m_pptConnected;
 
-    m_prevBtn->setEnabled(active);
-    m_nextBtn->setEnabled(active);
+    m_prevBtn->setEnabled(canNav);
+    m_nextBtn->setEnabled(canNav);
     m_gotoSpin->setEnabled(isPpt);
     m_gotoBtn->setEnabled(isPpt);
+    m_blankBtn->setEnabled(m_active);
 
-    if (!active) {
+    if (!m_active) {
         m_slideCtr->setText("— / —");
         m_navStatusLbl->setText("Now showing: None");
         m_navStatusLbl->setStyleSheet("color:#555;font-size:10px;");
-    } else {
-        static const char *kNames[kTypes] = {
-            "PowerPoint", "Google Slides", "Canva"
-        };
+    } else if (m_blank) {
         m_navStatusLbl->setText(
-            QString("Now showing: <b style='color:#66cc66;'>%1</b>")
-            .arg(kNames[m_activeType]));
+            "Now showing: <b style='color:#ff6666;'>Blanked</b>");
+        m_navStatusLbl->setStyleSheet("color:#aaa;font-size:10px;");
+        m_navStatusLbl->setTextFormat(Qt::RichText);
+    } else {
+        m_navStatusLbl->setText(
+            "Now showing: <b style='color:#66cc66;'>Presentation</b>");
         m_navStatusLbl->setStyleSheet("color:#aaa;font-size:10px;");
         m_navStatusLbl->setTextFormat(Qt::RichText);
     }
 }
 
-void PptTab::updateShowBtnStyles()
+void PptTab::updateBlankBtnStyle()
 {
-    for (int t = 0; t < kTypes; ++t) {
-        bool isActive = (m_activeType == t);
-        m_sections[t].showBtn->setText(isActive ? "■ Showing" : "▶ Show Slides");
-        m_sections[t].showBtn->setStyleSheet(
-            isActive ? kShowActiveStyle : kShowInactiveStyle);
-    }
+    m_blankBtn->setText(m_blank ? "▶  Resume" : "■  Blank");
+    m_blankBtn->setStyleSheet(m_blank ? kBlankActiveStyle : kBlankInactiveStyle);
 }
 
 // ── Navigation actions ────────────────────────────────────────
 
 void PptTab::sendKeyToActive(int vkey)
 {
-    if (m_activeType < 0) return;
-    HWND hwnd = selectedHwnd(m_activeType);
+    if (!m_active || m_blank) return;
+    HWND hwnd = selectedHwnd();
     if (!hwnd || !IsWindow(hwnd)) return;
 
     HWND prevFg = GetForegroundWindow();
@@ -743,20 +883,28 @@ IDispatch *PptTab::getPptView() const { return getPptActiveView(); }
 
 void PptTab::nextSlide()
 {
-    if (m_activeType == 0) {
-        IDispatch *v = getPptView();
-        if (v) { pptCall(v, L"Next"); v->Release(); return; }
-        // COM returned null — PPT not in slideshow mode; fall back to keystroke
+    if (m_pptConnected) {
+        int idx = m_winCombo->currentIndex() - 1;
+        bool isPptWindow = idx >= 0 && idx < m_windows.size() &&
+                           m_windows[idx].exe.contains("POWERPNT", Qt::CaseInsensitive);
+        if (isPptWindow) {
+            IDispatch *v = getPptView();
+            if (v) { pptCall(v, L"Next"); v->Release(); return; }
+        }
     }
     sendKeyToActive(VK_RIGHT);
 }
 
 void PptTab::prevSlide()
 {
-    if (m_activeType == 0) {
-        IDispatch *v = getPptView();
-        if (v) { pptCall(v, L"Previous"); v->Release(); return; }
-        // COM returned null — PPT not in slideshow mode; fall back to keystroke
+    if (m_pptConnected) {
+        int idx = m_winCombo->currentIndex() - 1;
+        bool isPptWindow = idx >= 0 && idx < m_windows.size() &&
+                           m_windows[idx].exe.contains("POWERPNT", Qt::CaseInsensitive);
+        if (isPptWindow) {
+            IDispatch *v = getPptView();
+            if (v) { pptCall(v, L"Previous"); v->Release(); return; }
+        }
     }
     sendKeyToActive(VK_LEFT);
 }
@@ -764,60 +912,110 @@ void PptTab::prevSlide()
 void PptTab::gotoSlide(int n)
 {
     if (n < 1) return;
-    if (m_activeType == 0) {
-        if (IDispatch *v = getPptView()) { pptCallInt(v, L"GotoSlide", n); v->Release(); }
+    if (m_pptConnected) {
+        if (IDispatch *v = getPptView()) {
+            pptCallInt(v, L"GotoSlide", n); v->Release(); return;
+        }
+        // Slideshow not active — try edit mode GotoSlide via ActiveWindow.View
+        if (IDispatch *app = getPptApp()) {
+            IDispatch *activeWin = pptObj(app, L"ActiveWindow");
+            if (activeWin) {
+                IDispatch *editView = pptObj(activeWin, L"View");
+                if (editView) { pptCallInt(editView, L"GotoSlide", n); editView->Release(); }
+                activeWin->Release();
+            }
+            app->Release();
+        }
     }
-    // Goto not supported for browser types (no reliable keystroke sequence)
 }
 
 void PptTab::onPrev() { prevSlide(); }
 void PptTab::onNext() { nextSlide(); }
-void PptTab::onGoto()  { gotoSlide(m_gotoSpin->value()); }
+void PptTab::onGoto() { gotoSlide(m_gotoSpin->value()); }
 
 // ── Poll timer (PowerPoint COM position read) ─────────────────
 
 void PptTab::onPollTimer()
 {
     bool doAutoScan = (++m_pollCount >= 10);
-    if (doAutoScan) m_pollCount = 0;
-
-    // Every 5 s: auto-detect windows for enabled sections with no selection
     if (doAutoScan) {
-        for (int t = 0; t < kTypes; ++t) {
-            if (!m_sections[t].group || !m_sections[t].group->isChecked()) continue;
-            if (m_sections[t].winCombo->currentIndex() > 0) continue;
-            scanWindows(t);
-        }
+        m_pollCount = 0;
+        // Every 5 s: auto-detect windows if no selection
+        if (m_winCombo->currentIndex() <= 0)
+            scanWindows();
     }
 
-    if (m_activeType != 0) return; // Only PowerPoint needs COM polling
+    // COM polling only when PowerPoint COM connected
+    if (!m_pptConnected) return;
+    // Skip visual-only actions when not active/visible, but still read slide position
+    bool activeVisible = m_active && !m_blank;
 
     IDispatch *view = getPptView();
     if (!view) {
-        if (m_curSlide != 0) {
-            m_curSlide = 0; m_totSlides = 0;
-            m_slideCtr->setText("— / —");
-            m_navStatusLbl->setText(
-                "Now showing: <b style='color:#66cc66;'>PowerPoint</b> "
-                "<span style='color:#888;'>(no slideshow active)</span>");
-            m_navStatusLbl->setTextFormat(Qt::RichText);
+        // Slideshow window not found — try edit mode (PowerPoint open but not in F5 mode).
+        bool updated = false;
+        IDispatch *app = getPptApp();
+        if (app) {
+            int cur = 0, total = 0;
+            IDispatch *activeWin = pptObj(app, L"ActiveWindow");
+            if (activeWin) {
+                IDispatch *editView = pptObj(activeWin, L"View");
+                if (editView) {
+                    IDispatch *slide = pptObj(editView, L"Slide");
+                    if (slide) { cur = pptInt(slide, L"SlideIndex"); slide->Release(); }
+                    editView->Release();
+                }
+                activeWin->Release();
+            }
+            IDispatch *activePres = pptObj(app, L"ActivePresentation");
+            if (activePres) {
+                IDispatch *slides = pptObj(activePres, L"Slides");
+                if (slides) { total = pptInt(slides, L"Count"); slides->Release(); }
+                activePres->Release();
+            }
+            app->Release();
+            if (cur > 0) {
+                m_slideCtr->setText(QString("%1 / %2").arg(cur)
+                                    .arg(total > 0 ? QString::number(total) : "?"));
+                m_gotoSpin->setMaximum(qMax(1, total));
+                m_navStatusLbl->setText(
+                    QString("Now showing: <b style='color:#66cc66;'>Presentation</b>  "
+                            "<span style='color:#888;'>edit mode — slide %1/%2 (press F5 for slideshow)</span>")
+                    .arg(cur).arg(total));
+                m_navStatusLbl->setTextFormat(Qt::RichText);
+                if (cur != m_curSlide || total != m_totSlides) {
+                    m_curSlide = cur; m_totSlides = total;
+                    emit slideStateChanged(cur, total, m_presTitle);
+                }
+                updated = true;
+            }
+        }
+        if (!updated) {
+            bool pptRunning = isPowerPointRunning();
+            if (m_curSlide != 0 || pptRunning) {
+                m_curSlide = 0; m_totSlides = 0;
+                m_slideCtr->setText("— / —");
+                m_navStatusLbl->setText(
+                    pptRunning
+                    ? "Now showing: <b style='color:#66cc66;'>Presentation</b> "
+                      "<span style='color:#888;'>(press F5 for slideshow mode)</span>"
+                    : "Now showing: <b style='color:#66cc66;'>Presentation</b> "
+                      "<span style='color:#888;'>(PowerPoint not running)</span>");
+                m_navStatusLbl->setTextFormat(Qt::RichText);
+            }
         }
         return;
     }
 
-    // Need total slides — walk up to the Presentation.Slides.Count via
-    // SlideShowWindow.Presentation.Slides.Count chain.
     int cur   = pptInt(view, L"CurrentShowPosition");
     int total = 0;
 
-    // Try to get count from parent Presentation.Slides
-    IDispatch *ssWin = pptObj(view, L"Parent"); // SlideShowView.Parent = SlideShowWindow
+    IDispatch *ssWin = pptObj(view, L"Parent");
     if (ssWin) {
         IDispatch *pres = pptObj(ssWin, L"Presentation");
         if (pres) {
             IDispatch *slides = pptObj(pres, L"Slides");
             if (slides) { total = pptInt(slides, L"Count"); slides->Release(); }
-            m_presTitle = QString(); // we don't cache name anymore
             pres->Release();
         }
         ssWin->Release();
@@ -829,7 +1027,7 @@ void PptTab::onPollTimer()
     m_gotoSpin->setMaximum(qMax(1, total));
 
     m_navStatusLbl->setText(
-        QString("Now showing: <b style='color:#66cc66;'>PowerPoint</b>  "
+        QString("Now showing: <b style='color:#66cc66;'>Presentation</b>  "
                 "<span style='color:#aaa;'>slide %1 of %2</span>")
         .arg(cur).arg(total));
     m_navStatusLbl->setTextFormat(Qt::RichText);

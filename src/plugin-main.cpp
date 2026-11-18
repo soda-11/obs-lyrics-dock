@@ -199,6 +199,10 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
     if (event == OBS_FRONTEND_EVENT_EXIT) {
         saveHotkeyBindings();
         if (s_dock) {
+            // Release the window_capture source ref BEFORE OBS destroys scenes.
+            // Without this, the deferred scene_destroy task crashes on mutex
+            // unlock because our ref-count prevents the source from being freed.
+            s_dock->releasePptCapture();
             // Stop all media (incl. any OBS sources) before OBS tears down its
             // audio context — prevents mp_media_thread / copy_audio_data crashes.
             s_dock->stopAllMedia();
@@ -209,6 +213,14 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
         if (s_wsServ) s_wsServ->setDock(nullptr);
         SongManager::instance().save();
         if (s_wsServ) s_wsServ->stop();
+        return;
+    }
+
+    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP) {
+        // OBS is about to destroy all sources in this collection.  Release the
+        // plugin's held obs_source_t* ref so OBS can unload without hitting
+        // "Source Cleanup Error — sources could not be unloaded".
+        if (s_dock) s_dock->releasePptCapture();
         return;
     }
 
@@ -226,7 +238,7 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
 
 MODULE_EXPORT bool obs_module_load()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Loading v10.0.0");
+    blog(LOG_INFO, "[obs-lyrics-dock] Loading v12.24.0");
 
     // Capture module data path while obs_current_module() is valid.
     // obs_get_module_data_path() can return a relative path (e.g.
@@ -325,7 +337,7 @@ MODULE_EXPORT bool obs_module_load()
         loadHotkeyBindings();
     }
 
-    blog(LOG_INFO, "[obs-lyrics-dock] Registered v10.0.0");
+    blog(LOG_INFO, "[obs-lyrics-dock] Registered v12.24.0");
     return true;
 }
 

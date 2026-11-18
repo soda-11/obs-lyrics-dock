@@ -43,6 +43,7 @@ void lyrics_renderer_scripture_clear();
 void lyrics_renderer_paragraph_push(const QString &title, const QString &text);
 void lyrics_renderer_paragraph_clear();
 void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor);
+void lyrics_renderer_set_alt_sentence_color(bool enabled, uint32_t fontColor, uint32_t outlineColor);
 
 // ── Settings access (used by LayoutDialog) ─────────────────────
 // Returns the first active OBS source instance, or nullptr if none.

@@ -44,9 +44,12 @@ struct ServiceItem {
     QList<LyricsSection> sections; // embedded song data for portability
     QString text;         // Paragraphs: body text (blank lines = slide breaks)
     QString filePath;     // Media / Presentation (legacy single-file)
+    QString windowExe;    // Presentation: exe name to auto-select (e.g. "POWERPNT.EXE")
     QStringList mediaPaths; // Media: list of media file paths
     QMap<int,QString> slideBgs;  // slide-index → bg path (Paragraphs)
     int colorPresetIdx = -1;     // which color preset button (0-based) was last applied; -1 = none
+    bool altSentenceColor  = false; // paragraph: alternate even-line color
+    int  altSentencePreset = -1;    // paragraph: 0-based index into m_colorBtn for even lines
     QStringList parseSlides() const;
 
     QJsonObject toJson()                       const;
@@ -166,7 +169,9 @@ public:
                              const QString &section);
     void activateSlideFromRemote(int serviceIdx, int slideIdx);
     void applyScriptureFromRemote(const QString &title, const QString &text);
+    void setCurrentBgPath(const QString &p) { m_currentBgPath = p; }
     void stopAllMedia();
+    void releasePptCapture();
     void pptNext();
     void pptPrev();
     void pptGoto(int slide);
@@ -250,8 +255,12 @@ private:
     void    updateServiceListItem(int row);
     void    removeServiceItem(int row);
     void    showParagraphEditDialog(int serviceIdx);
+    void    applyAltSentenceColor(const ServiceItem &item);
     void    importServiceItemsFromRemote(const QJsonArray &items);
-    QJsonArray buildExportServiceJson() const;
+    QJsonObject buildFullServiceExport() const;
+    void    applyFullServiceImport(const QJsonObject &root, bool replaceLayout);
+    void    applyColorPresetsFromJson(const QJsonArray &arr);
+    void    applySourceSettingsFromJson(const QString &jsonStr);
 
     // ── Service Order ─────────────────────────────────────────
     QList<ServiceItem>  m_serviceItems;
@@ -271,7 +280,8 @@ private:
     QPushButton        *m_prevBtn          = nullptr;
     QPushButton        *m_nextBtn          = nullptr;
     QPushButton        *m_blackoutBtn      = nullptr;
-    LayoutDialog       *m_lyricsLayoutDialog = nullptr;
+    LayoutDialog       *m_lyricsLayoutDialog     = nullptr;
+    LayoutDialog       *m_paragraphLayoutDialog  = nullptr;
     ColorPresetButton  *m_colorBtn[6]       = {};
     QSpinBox           *m_linesPerSlideSpin = nullptr;
     QLabel             *m_slideCounter      = nullptr;

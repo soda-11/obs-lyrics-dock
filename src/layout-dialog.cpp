@@ -17,6 +17,61 @@
 #include <QFontComboBox>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QColorDialog>
+
+// ── OBS ABGR ↔ QColor helpers ─────────────────────────────────
+static QColor obsToQt(long long raw)
+{
+    uint32_t c = (uint32_t)raw;
+    int r = (c >>  0) & 0xFF;
+    int g = (c >>  8) & 0xFF;
+    int b = (c >> 16) & 0xFF;
+    int a = (c >> 24) & 0xFF;
+    return QColor(r, g, b, a ? a : 255);
+}
+static long long qtToObs(const QColor &c)
+{
+    return (long long)((uint32_t)c.red()
+                      | ((uint32_t)c.green()  <<  8)
+                      | ((uint32_t)c.blue()   << 16)
+                      | ((uint32_t)c.alpha()  << 24));
+}
+
+// ── Colour-swatch button helpers ──────────────────────────────
+static void applyColorStyle(QPushButton *btn, const QColor &c)
+{
+    btn->setProperty("userColor", c);
+    QString bg = c.name(QColor::HexRgb);
+    // Pick a contrasting label colour
+    int luma = c.red()*299 + c.green()*587 + c.blue()*114;
+    QString fg = (luma > 128000) ? "#000" : "#fff";
+    btn->setStyleSheet(QString(
+        "QPushButton{background:%1;color:%2;border:1px solid #666;"
+        "border-radius:2px;font-size:10px;padding:1px 4px;}").arg(bg, fg));
+    btn->setText(c.name(QColor::HexRgb).toUpper());
+}
+static QPushButton *makeColorBtn(QWidget *parent, const QColor &init = Qt::white)
+{
+    auto *btn = new QPushButton(parent);
+    btn->setFixedHeight(24);
+    btn->setMinimumWidth(80);
+    applyColorStyle(btn, init);
+    QObject::connect(btn, &QPushButton::clicked, btn, [btn]() {
+        QColor cur = btn->property("userColor").value<QColor>();
+        QColor c = QColorDialog::getColor(cur, btn, "Pick Colour",
+                                          QColorDialog::ShowAlphaChannel);
+        if (c.isValid()) applyColorStyle(btn, c);
+    });
+    return btn;
+}
+static QColor getColorBtn(QPushButton *btn)
+{
+    return btn ? btn->property("userColor").value<QColor>() : Qt::white;
+}
+static void setColorBtn(QPushButton *btn, const QColor &c)
+{
+    if (btn) applyColorStyle(btn, c);
+}
 
 // ── Build one text-box settings group ────────────────────────
 QWidget *LayoutDialog::buildBoxGroup(const QString &groupLabel, BoxRow &row)
@@ -52,6 +107,37 @@ QWidget *LayoutDialog::buildBoxGroup(const QString &groupLabel, BoxRow &row)
     row.vAlign->addItems({"Top", "Center", "Bottom"});
     form->addRow("V-Align:", row.vAlign);
 
+    // ── Colour & opacity ──────────────────────────────────────
+    row.colorBtn = makeColorBtn(grp, Qt::white);
+    form->addRow("Text colour:", row.colorBtn);
+
+    row.opacity = new QSpinBox;
+    row.opacity->setRange(0, 100); row.opacity->setSuffix(" %"); row.opacity->setFixedWidth(70);
+    row.opacity->setValue(100);
+    form->addRow("Text opacity:", row.opacity);
+
+    // ── Outline ───────────────────────────────────────────────
+    row.outline = new QCheckBox("Enable");
+    form->addRow("Outline:", row.outline);
+
+    row.outlineSize = new QSpinBox;
+    row.outlineSize->setRange(1, 20); row.outlineSize->setSuffix(" px"); row.outlineSize->setFixedWidth(70);
+    form->addRow("Outline width:", row.outlineSize);
+
+    row.outlineColorBtn = makeColorBtn(grp, Qt::black);
+    form->addRow("Outline colour:", row.outlineColorBtn);
+
+    // ── Background ────────────────────────────────────────────
+    row.bgCheck = new QCheckBox("Enable");
+    form->addRow("Background:", row.bgCheck);
+
+    row.bgColorBtn = makeColorBtn(grp, Qt::black);
+    form->addRow("BG colour:", row.bgColorBtn);
+
+    row.bgOpacity = new QSpinBox;
+    row.bgOpacity->setRange(0, 100); row.bgOpacity->setSuffix(" %"); row.bgOpacity->setFixedWidth(70);
+    form->addRow("BG opacity:", row.bgOpacity);
+
     return grp;
 }
 
@@ -59,13 +145,13 @@ QWidget *LayoutDialog::buildBoxGroup(const QString &groupLabel, BoxRow &row)
 LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
     : QDialog(parent), m_tab(tabName)
 {
-    QString title = (tabName == "lyrics") ? "Lyrics Layout"
-                  : (tabName == "paragraph")    ? "Call to Worship Layout"
-                                          : "Scripture Layout";
+    QString title = (tabName == "lyrics")     ? "Lyrics Layout"
+                  : (tabName == "paragraph")  ? "Call to Worship Layout"
+                                              : "Scripture Layout";
     setWindowTitle(title);
     setWindowFlags(Qt::Dialog | Qt::Tool);
     setAttribute(Qt::WA_DeleteOnClose);
-    setMinimumWidth(360);
+    setMinimumWidth(380);
 
     auto *mainL  = new QVBoxLayout(this);
     auto *scroll = new QScrollArea;
@@ -161,6 +247,12 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
         m_hMargin->setRange(0, 400); m_hMargin->setSuffix(" px"); m_hMargin->setFixedWidth(80);
         lForm->addRow("Title strip height:", m_titleH);
         lForm->addRow("Left/right margin:",  m_hMargin);
+        if (tabName == "paragraph") {
+            m_paragraphTextY = new QSpinBox;
+            m_paragraphTextY->setRange(0, 1080); m_paragraphTextY->setSuffix(" px"); m_paragraphTextY->setFixedWidth(80);
+            m_paragraphTextY->setToolTip("Extra space between the title strip and the body text box");
+            lForm->addRow("Body text top offset:", m_paragraphTextY);
+        }
         cl->addWidget(lGrp);
     }
 
@@ -175,7 +267,7 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
     connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::close);
     mainL->addWidget(btnBox);
 
-    resize(380, 620);
+    resize(400, 700);
     loadSettings();
 }
 
@@ -198,6 +290,24 @@ void LayoutDialog::loadSettings()
         row.italic->setChecked(obs_data_get_bool(s, (p + "italic").c_str()));
         row.hAlign->setCurrentIndex((int)obs_data_get_int(s, (p + "align").c_str()));
         row.vAlign->setCurrentIndex((int)obs_data_get_int(s, (p + "valign").c_str()));
+
+        // Colour / style
+        if (row.colorBtn)
+            setColorBtn(row.colorBtn, obsToQt(obs_data_get_int(s, (p + "color").c_str())));
+        if (row.opacity)
+            row.opacity->setValue((int)obs_data_get_int(s, (p + "opacity").c_str()));
+        if (row.outline)
+            row.outline->setChecked(obs_data_get_bool(s, (p + "outline").c_str()));
+        if (row.outlineSize)
+            row.outlineSize->setValue((int)obs_data_get_int(s, (p + "outline_size").c_str()));
+        if (row.outlineColorBtn)
+            setColorBtn(row.outlineColorBtn, obsToQt(obs_data_get_int(s, (p + "outline_color").c_str())));
+        if (row.bgCheck)
+            row.bgCheck->setChecked(obs_data_get_bool(s, (p + "bg").c_str()));
+        if (row.bgColorBtn)
+            setColorBtn(row.bgColorBtn, obsToQt(obs_data_get_int(s, (p + "bg_color").c_str())));
+        if (row.bgOpacity)
+            row.bgOpacity->setValue((int)obs_data_get_int(s, (p + "bg_opacity").c_str()));
     }
 
     if (m_bottomBar)
@@ -218,6 +328,8 @@ void LayoutDialog::loadSettings()
 
     if (m_titleH  && m_titleHKey)  m_titleH->setValue( (int)obs_data_get_int(s, m_titleHKey));
     if (m_hMargin && m_hMarginKey) m_hMargin->setValue((int)obs_data_get_int(s, m_hMarginKey));
+    if (m_paragraphTextY)
+        m_paragraphTextY->setValue(readOrDef("paragraph_text_y", 0));
 
     obs_data_release(s);
 }
@@ -239,6 +351,24 @@ void LayoutDialog::onApply()
         obs_data_set_bool(s, (p + "italic").c_str(),    row.italic->isChecked());
         obs_data_set_int (s, (p + "align").c_str(),     row.hAlign->currentIndex());
         obs_data_set_int (s, (p + "valign").c_str(),    row.vAlign->currentIndex());
+
+        // Colour / style
+        if (row.colorBtn)
+            obs_data_set_int(s, (p + "color").c_str(), qtToObs(getColorBtn(row.colorBtn)));
+        if (row.opacity)
+            obs_data_set_int(s, (p + "opacity").c_str(), row.opacity->value());
+        if (row.outline)
+            obs_data_set_bool(s, (p + "outline").c_str(), row.outline->isChecked());
+        if (row.outlineSize)
+            obs_data_set_int(s, (p + "outline_size").c_str(), row.outlineSize->value());
+        if (row.outlineColorBtn)
+            obs_data_set_int(s, (p + "outline_color").c_str(), qtToObs(getColorBtn(row.outlineColorBtn)));
+        if (row.bgCheck)
+            obs_data_set_bool(s, (p + "bg").c_str(), row.bgCheck->isChecked());
+        if (row.bgColorBtn)
+            obs_data_set_int(s, (p + "bg_color").c_str(), qtToObs(getColorBtn(row.bgColorBtn)));
+        if (row.bgOpacity)
+            obs_data_set_int(s, (p + "bg_opacity").c_str(), row.bgOpacity->value());
     }
 
     if (m_bottomBar)
@@ -253,6 +383,7 @@ void LayoutDialog::onApply()
 
     if (m_titleH  && m_titleHKey)  obs_data_set_int(s, m_titleHKey,  m_titleH->value());
     if (m_hMargin && m_hMarginKey) obs_data_set_int(s, m_hMarginKey, m_hMargin->value());
+    if (m_paragraphTextY) obs_data_set_int(s, "paragraph_text_y", m_paragraphTextY->value());
 
     obs_source_update(src, s);
     obs_data_release(s);

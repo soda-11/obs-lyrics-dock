@@ -101,6 +101,18 @@ void AudioBin::loadState()
     rebuildList();
 }
 
+void AudioBin::setFiles(const QStringList &paths)
+{
+    stopPlayback();
+    m_files.clear();
+    for (const QString &p : paths) {
+        if (QFile::exists(p))
+            m_files << p;
+    }
+    rebuildList();
+    saveState();
+}
+
 // ── Slots ─────────────────────────────────────────────────────────
 
 void AudioBin::onAddAudio()

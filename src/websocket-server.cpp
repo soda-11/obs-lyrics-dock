@@ -743,6 +743,7 @@ void WebSocketServer::handleCommand(WsClient *client,
         QMetaObject::invokeMethod(qApp, [=]() {
             if (stopAudio) lyrics_renderer_audio_clear();
             lyrics_renderer_media_push(path, fadeMs);
+            if (m_dock) m_dock->setCurrentBgPath(path);
             if (s_server) s_server->broadcastMediaState(path);
         }, Qt::QueuedConnection);
         return;
@@ -751,6 +752,7 @@ void WebSocketServer::handleCommand(WsClient *client,
     if (type == "clearMedia") {
         QMetaObject::invokeMethod(qApp, [=]() {
             lyrics_renderer_media_clear();
+            if (m_dock) m_dock->setCurrentBgPath({});
             if (s_server) s_server->broadcastMediaState(QString());
         }, Qt::QueuedConnection);
         return;

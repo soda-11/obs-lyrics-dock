@@ -10,6 +10,7 @@ class QDoubleSpinBox;
 class QCheckBox;
 class QComboBox;
 class QFontComboBox;
+class QPushButton;
 
 class LayoutDialog : public QDialog {
     Q_OBJECT
@@ -22,13 +23,22 @@ private slots:
 
 private:
     struct BoxRow {
-        const char    *prefix    = nullptr;
-        QFontComboBox *fontFace  = nullptr;
-        QSpinBox      *fontSize  = nullptr;
-        QCheckBox     *bold      = nullptr;
-        QCheckBox     *italic    = nullptr;
-        QComboBox     *hAlign    = nullptr;
-        QComboBox     *vAlign    = nullptr;
+        const char    *prefix         = nullptr;
+        QFontComboBox *fontFace       = nullptr;
+        QSpinBox      *fontSize       = nullptr;
+        QCheckBox     *bold           = nullptr;
+        QCheckBox     *italic         = nullptr;
+        QComboBox     *hAlign         = nullptr;
+        QComboBox     *vAlign         = nullptr;
+        // Colour / style
+        QPushButton   *colorBtn       = nullptr;
+        QSpinBox      *opacity        = nullptr;
+        QCheckBox     *outline        = nullptr;
+        QSpinBox      *outlineSize    = nullptr;
+        QPushButton   *outlineColorBtn= nullptr;
+        QCheckBox     *bgCheck        = nullptr;
+        QPushButton   *bgColorBtn     = nullptr;
+        QSpinBox      *bgOpacity      = nullptr;
     };
 
     QWidget *buildBoxGroup(const QString &groupLabel, BoxRow &row);
@@ -47,8 +57,9 @@ private:
     QSpinBox *m_chChineseInterval = nullptr;
     QSpinBox *m_chEnglishY   = nullptr;
     // CTW / Scripture layout
-    QSpinBox *m_titleH       = nullptr;
-    QSpinBox *m_hMargin      = nullptr;
-    const char *m_titleHKey  = nullptr;
-    const char *m_hMarginKey = nullptr;
+    QSpinBox *m_titleH          = nullptr;
+    QSpinBox *m_hMargin         = nullptr;
+    QSpinBox *m_paragraphTextY  = nullptr; // paragraph only: body text top offset
+    const char *m_titleHKey     = nullptr;
+    const char *m_hMarginKey    = nullptr;
 };

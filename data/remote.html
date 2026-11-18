@@ -728,8 +728,8 @@ body{
         <div id="lpSvcOrder"><div style="font-size:11px;color:#555;padding:0 4px">Loading…</div></div>
       </div>
       <div id="lpSection2">
-        <button class="lpNavBigBtn" id="lpPrevBtn" onclick="lpNavFlash(this);send({type:'lpPrev',mode:lpCurrentMode})">◀</button>
-        <button class="lpNavBigBtn" id="lpNextBtn" onclick="lpNavFlash(this);send({type:'lpNext',mode:lpCurrentMode})">▶</button>
+        <button class="lpNavBigBtn" id="lpPrevBtn" onclick="lpDoPrev()">◀</button>
+        <button class="lpNavBigBtn" id="lpNextBtn" onclick="lpDoNext()">▶</button>
       </div>
     </div>
   </div>
@@ -1233,6 +1233,11 @@ function selectServiceItem(si){
     currentSongIdx=-1;
     var titleEl=document.getElementById('col2SongTitle');
     if(titleEl) titleEl.textContent=item.title;
+    // For presentation items: activate immediately via the index-driven command
+    // so the plugin loads the correct window (windowExe) for this specific item.
+    if(item.type==='presentation'){
+      send({type:'activateSlide',serviceIdx:si,slideIdx:0});
+    }
     renderServiceList();
     renderServiceItemSlides(item);
     // Apply first configured background when switching to a paragraphs item
@@ -1280,8 +1285,9 @@ function renderServiceItemSlides(item){
         +'</div>';
     }).join('')+'</div>';
   } else if(item.type==='presentation'){
+    var _psi=currentServiceIdx;
     el.innerHTML='<div class="slideGrid">'
-      +'<div class="sCard" onclick="send({type:\'presentationShow\',presType:0})">'
+      +'<div class="sCard" onclick="selectServiceItem('+_psi+')">'
       +'<div class="sCardFoot" style="background:#c084fc">'
       +'<span class="sCardNum">▶</span>'
       +'<span class="sCardSect">PPT</span>'
@@ -1472,7 +1478,7 @@ function renderLiveModeSlides(){
       html+='<div class="liveSongHdr" id="liveSongHdr'+si+'" onclick="selectServiceItem('+si+')">'
         +(si+1)+'. '+esc(item.title)+'</div>';
       html+='<div class="slideGrid">'
-        +'<div class="sCard" onclick="send({type:\'presentationShow\',presType:0})">'
+        +'<div class="sCard" onclick="selectServiceItem('+si+')">'
         +'<div class="sCardFoot" style="background:#c084fc">'
         +'<span class="sCardNum">▶</span>'
         +'<span class="sCardSect">PPT</span>'
@@ -1518,9 +1524,9 @@ function activateSlide(serviceIdx,slideIdx,highlightLocal){
     }
   }
   send({type:'activateSlide',serviceIdx:serviceIdx,slideIdx:slideIdx});
+  localActiveSvc=serviceIdx;
+  localActiveSvcSlide=slideIdx;
   if(highlightLocal){
-    localActiveSvc=serviceIdx;
-    localActiveSvcSlide=slideIdx;
     currentSlide=-1; // no lyrics slide active
     document.querySelectorAll('.sCard').forEach(function(el){
       if(el.dataset.svc!==undefined){
@@ -1830,6 +1836,56 @@ function lpNavFlash(btn){
   void btn.offsetWidth;
   btn.classList.add('flashing');
   setTimeout(function(){ btn.classList.remove('flashing'); }, 350);
+}
+function lpGetSlideCount(item){
+  if(!item) return 0;
+  if(item.type==='lyrics'){
+    var song=songData[item.songIdx];
+    return song?(song.slides||[]).length:0;
+  }
+  if(item.type==='paragraphs') return parseParagraphSlides(item.text||'').length;
+  if(item.type==='media') return (item.mediaPaths||[]).length;
+  return 1; // presentation = 1 card
+}
+function lpNavNext(){
+  var source=serviceOrderData.length?serviceOrderData:
+    songData.map(function(s,i){return {type:'lyrics',title:s.title,songIdx:i};});
+  if(!source.length) return;
+  var si=localActiveSvc>=0?localActiveSvc:0;
+  var slide=localActiveSvcSlide>=0?localActiveSvcSlide:0;
+  var count=lpGetSlideCount(source[si]);
+  if(slide+1<count){
+    activateSlide(si,slide+1,source[si].type!=='lyrics');
+  } else {
+    si++;
+    if(si>=source.length) return;
+    activateSlide(si,0,source[si].type!=='lyrics');
+  }
+}
+function lpNavPrev(){
+  var source=serviceOrderData.length?serviceOrderData:
+    songData.map(function(s,i){return {type:'lyrics',title:s.title,songIdx:i};});
+  if(!source.length) return;
+  var si=localActiveSvc>=0?localActiveSvc:0;
+  var slide=localActiveSvcSlide>=0?localActiveSvcSlide:0;
+  if(slide>0){
+    activateSlide(si,slide-1,source[si].type!=='lyrics');
+  } else {
+    si--;
+    if(si<0) return;
+    var prevCount=Math.max(1,lpGetSlideCount(source[si]));
+    activateSlide(si,prevCount-1,source[si].type!=='lyrics');
+  }
+}
+function lpDoNext(){
+  lpNavFlash(document.getElementById('lpNextBtn'));
+  if(lpCurrentMode==='ppt') send({type:'lpNext',mode:'ppt'});
+  else lpNavNext();
+}
+function lpDoPrev(){
+  lpNavFlash(document.getElementById('lpPrevBtn'));
+  if(lpCurrentMode==='ppt') send({type:'lpPrev',mode:'ppt'});
+  else lpNavPrev();
 }
 function lpSelectPres(type){
   var newType = (type === lpActivePres) ? -1 : type;
@@ -2164,12 +2220,12 @@ function lpSelectService(si){
   if(!item) return;
   if(item.type==='presentation'){
     lpCurrentMode='ppt';
-    send({type:'presentationShow',presType:item.presType||0});
+    send({type:'activateSlide',serviceIdx:si,slideIdx:0});
     currentServiceIdx=si; currentSongIdx=-1;
   } else if(item.type==='lyrics'){
     lpCurrentMode='lyr';
     if(serviceOrderData.length){
-      send({type:'activateSlide',serviceIdx:si,slideIdx:0});
+      activateSlide(si,0,false);
     } else {
       var song=songData[item.songIdx];
       if(song&&song.slides&&song.slides[0]){

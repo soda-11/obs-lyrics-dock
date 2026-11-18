@@ -836,3 +836,19 @@ void MediaGallery::loadState()
     broadcastGalleryList(m_items);
     emit mediaListChanged();
 }
+
+void MediaGallery::setItemPaths(const QStringList &paths)
+{
+    m_items.clear();
+    m_activeIndex = -1;
+    m_lastActiveIndex = -1;
+    for (const QString &p : paths) {
+        if (!QFile::exists(p)) continue;
+        MediaItem item; item.path = p; item.isVideo = isVideoFile(p);
+        m_items << item;
+    }
+    rebuildGrid();
+    saveState();
+    broadcastGalleryList(m_items);
+    emit mediaListChanged();
+}

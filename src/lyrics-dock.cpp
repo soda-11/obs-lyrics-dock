@@ -1036,29 +1036,148 @@ void LyricsDock::audioBinStopFromRemote()
     // broadcastAudioBinState(-1,false) is called inside stopPlayback via m_wsServer
 }
 
-QJsonArray LyricsDock::buildExportServiceJson() const
+QJsonObject LyricsDock::buildFullServiceExport() const
 {
-    QJsonArray arr;
-    for (const auto &item : m_serviceItems) {
-        if (item.type != ServiceItem::Type::Lyrics &&
-            item.type != ServiceItem::Type::Paragraphs) continue;
-        QJsonObject o = item.toJson();
-        // Strip background settings
-        o.remove("slideBgs");
-        if (item.type == ServiceItem::Type::Lyrics && !item.sections.isEmpty()) {
-            QJsonArray secs;
-            for (const auto &sec : item.sections) {
-                QJsonObject so = sec.toJson();
-                so.remove("backgroundPath");
-                secs.append(so);
-            }
-            o["sections"] = secs;
+    QJsonObject root;
+    root["version"] = 2;
+
+    root["linesPerSlide"] = m_linesPerSlideSpin ? m_linesPerSlideSpin->value() : 4;
+    if (m_globalFadeSpin) root["globalFadeMs"] = m_globalFadeSpin->value();
+
+    root["colorPresets"] = colorPresetsJson();
+
+    // OBS source layout settings
+    obs_source_t *src = lyrics_renderer_get_source();
+    if (src) {
+        obs_data_t *s = obs_source_get_settings(src);
+        if (s) {
+            root["sourceSettings"] = QString::fromUtf8(obs_data_get_json(s));
+            obs_data_release(s);
         }
-        // Default to preset 0
-        o["colorPresetIdx"] = 0;
-        arr.append(o);
     }
-    return arr;
+
+    // Graphics Bin
+    if (m_sharedGallery) {
+        QJsonArray gArr;
+        for (const QString &p : m_sharedGallery->itemPaths()) gArr.append(p);
+        root["gallery"] = gArr;
+    }
+
+    // Audio Bin
+    if (m_audioBin) {
+        QJsonArray aArr;
+        for (const QString &p : m_audioBin->files()) aArr.append(p);
+        root["audioBin"] = aArr;
+    }
+
+    // All service items (Lyrics, Paragraphs, Media — not Presentation)
+    QJsonArray items;
+    for (const auto &item : m_serviceItems) {
+        if (item.type == ServiceItem::Type::Presentation) continue;
+        items.append(item.toJson());
+    }
+    root["items"] = items;
+
+    return root;
+}
+
+void LyricsDock::applyColorPresetsFromJson(const QJsonArray &arr)
+{
+    for (int i = 0; i < 6 && i < arr.size(); ++i) {
+        if (!m_colorBtn[i]) continue;
+        auto po = arr[i].toObject();
+        uint32_t fc = (uint32_t)po["font"].toInteger(0x00FFFFFF);
+        uint32_t oc = (uint32_t)po["outline"].toInteger(0x00000000);
+        m_colorBtn[i]->setColors(
+            QColor((fc >> 16) & 0xFF, (fc >> 8) & 0xFF, fc & 0xFF),
+            QColor((oc >> 16) & 0xFF, (oc >> 8) & 0xFF, oc & 0xFF));
+    }
+}
+
+void LyricsDock::applySourceSettingsFromJson(const QString &jsonStr)
+{
+    obs_source_t *src = lyrics_renderer_get_source();
+    if (!src) return;
+    obs_data_t *d = obs_data_create_from_json(jsonStr.toUtf8().constData());
+    if (!d) return;
+    obs_source_update(src, d);
+    obs_data_release(d);
+}
+
+void LyricsDock::applyFullServiceImport(const QJsonObject &root, bool replaceLayout)
+{
+    int version = root["version"].toInt(1);
+
+    if (replaceLayout) {
+        if (root.contains("colorPresets"))
+            applyColorPresetsFromJson(root["colorPresets"].toArray());
+
+        if (root.contains("sourceSettings"))
+            applySourceSettingsFromJson(root["sourceSettings"].toString());
+
+        if (root["gallery"].isArray()) {
+            QStringList paths;
+            for (const auto &v : root["gallery"].toArray()) paths << v.toString();
+            if (m_sharedGallery) m_sharedGallery->setItemPaths(paths);
+        }
+
+        if (root["audioBin"].isArray()) {
+            QStringList paths;
+            for (const auto &v : root["audioBin"].toArray()) paths << v.toString();
+            if (m_audioBin) m_audioBin->setFiles(paths);
+        }
+
+        if (root.contains("linesPerSlide")) {
+            int lpp = root["linesPerSlide"].toInt(4);
+            setGlobalLinesPerSlide(lpp);
+            if (m_linesPerSlideSpin) { QSignalBlocker b(m_linesPerSlideSpin); m_linesPerSlideSpin->setValue(lpp); }
+        }
+
+        if (root.contains("globalFadeMs") && m_globalFadeSpin) {
+            int fms = root["globalFadeMs"].toInt(500);
+            QSignalBlocker b(m_globalFadeSpin);
+            m_globalFadeSpin->setValue(fms);
+            if (m_sharedGallery) m_sharedGallery->setFadeDurationMs(fms);
+        }
+    }
+
+    // Always replace service items (Lyrics, Paragraphs, Media)
+    // Keep existing Presentation items as-is
+    for (int i = m_serviceItems.size() - 1; i >= 0; --i) {
+        if (m_serviceItems[i].type != ServiceItem::Type::Presentation)
+            m_serviceItems.removeAt(i);
+    }
+
+    int insertAt = 0;
+    m_sequenceSongIds.clear();
+    for (const auto &v : root["items"].toArray()) {
+        if (!v.isObject()) continue;
+        ServiceItem si = ServiceItem::fromJson(v.toObject());
+        if (si.type == ServiceItem::Type::Presentation) continue;
+
+        if (version == 1) {
+            // v1 format: strip backgrounds (weren't saved correctly)
+            si.slideBgs.clear();
+            for (auto &sec : si.sections) sec.backgroundPath.clear();
+            si.colorPresetIdx = 0;
+        }
+
+        // Library fallback for Lyrics items with no embedded sections
+        if (si.type == ServiceItem::Type::Lyrics && si.sections.isEmpty()) {
+            const Song *lib = SongManager::instance().findById(si.id);
+            if (lib) si.sections = lib->sections;
+        }
+
+        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+        m_serviceItems.insert(insertAt++, si);
+    }
+
+    m_activeServiceIdx = -1;
+    clearSlideGrid();
+    rebuildServiceList();
+    saveServiceOrder();
+    if (replaceLayout) saveState();
+    broadcastSequence();
 }
 
 void LyricsDock::importServiceItemsFromRemote(const QJsonArray &items)
@@ -1241,6 +1360,7 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
             m_currentBgPath = bgPath;
         }
         // Push text through CTW renderer
+        applyAltSentenceColor(item);
         lyrics_renderer_paragraph_push(item.title, slides[slideIdx]);
         if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[slideIdx]);
         if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
@@ -1263,6 +1383,7 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
     case ServiceItem::Type::Media: {
         if (slideIdx < 0 || slideIdx >= item.mediaPaths.size()) return;
         const QString &path = item.mediaPaths[slideIdx];
+        m_currentBgPath = path;
         // audio runs independently — video starting no longer stops it
         lyrics_renderer_clear();   // wipe any lyrics from OBS source
         int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
@@ -1273,6 +1394,12 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
         }
         break;
     }
+    case ServiceItem::Type::Presentation:
+        m_activeServiceIdx = serviceIdx;
+        if (m_pptTab) m_pptTab->requestShow(0, item.windowExe);
+        // Highlight the presentation item in the service list
+        m_serviceList->setCurrentRow(serviceIdx);
+        break;
     default:
         break;
     }
@@ -1285,6 +1412,10 @@ void LyricsDock::applyScriptureFromRemote(const QString &title, const QString &t
 
 void LyricsDock::applyParagraphsFromRemote(const QString &title, const QString &text)
 {
+    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
+        applyAltSentenceColor(m_serviceItems[m_activeServiceIdx]);
+    else
+        lyrics_renderer_set_alt_sentence_color(false, 0, 0);
     lyrics_renderer_paragraph_push(title, text);
     if (m_wsServer) m_wsServer->broadcastCtwState(title, text);
 }
@@ -1296,6 +1427,11 @@ void LyricsDock::stopAllMedia()
     if (m_audioBin)      m_audioBin->stopPlayback();
     lyrics_renderer_mv_clear();
     lyrics_renderer_media_clear();
+}
+
+void LyricsDock::releasePptCapture()
+{
+    if (m_pptTab) m_pptTab->releaseCapture();
 }
 
 // ── Remote control helpers ────────────────────────────────────
@@ -1435,6 +1571,7 @@ QJsonObject ServiceItem::toJson() const
     }
     o["id"] = id; o["title"] = title; o["artist"] = artist;
     o["text"] = text; o["filePath"] = filePath;
+    if (!windowExe.isEmpty()) o["windowExe"] = windowExe;
     if (!mediaPaths.isEmpty()) {
         QJsonArray mp;
         for (const auto &p : mediaPaths) mp.append(p);
@@ -1453,6 +1590,10 @@ QJsonObject ServiceItem::toJson() const
     }
     if (colorPresetIdx >= 0)
         o["colorPresetIdx"] = colorPresetIdx;
+    if (altSentenceColor)
+        o["altSentenceColor"] = true;
+    if (altSentencePreset >= 0)
+        o["altSentencePreset"] = altSentencePreset;
     return o;
 }
 
@@ -1472,6 +1613,7 @@ ServiceItem ServiceItem::fromJson(const QJsonObject &obj)
     item.id = obj["id"].toString(); item.title = obj["title"].toString();
     item.artist = obj["artist"].toString(); item.text = obj["text"].toString();
     item.filePath = obj["filePath"].toString();
+    item.windowExe = obj["windowExe"].toString();
     for (const auto &v : obj["mediaPaths"].toArray())
         item.mediaPaths << v.toString();
     for (const auto &v : obj["sections"].toArray())
@@ -1481,6 +1623,8 @@ ServiceItem ServiceItem::fromJson(const QJsonObject &obj)
         item.slideBgs[it.key().toInt()] = it.value().toString();
     if (obj.contains("colorPresetIdx"))
         item.colorPresetIdx = obj["colorPresetIdx"].toInt(-1);
+    item.altSentenceColor  = obj["altSentenceColor"].toBool(false);
+    item.altSentencePreset = obj["altSentencePreset"].toInt(-1);
     return item;
 }
 
@@ -1995,6 +2139,9 @@ void LyricsDock::buildUi()
         lyrics_renderer_clear();
         lyrics_renderer_scripture_clear();
         if (m_sharedGallery) m_sharedGallery->clearActiveCard();
+        // VideoTab pushed media to OBS background; invalidate cache so the next
+        // paragraph/lyrics slide re-pushes its assigned background correctly.
+        m_currentBgPath.clear();
     });
     connect(m_sharedGallery, &MediaGallery::stopAllRequested, this, [this](){
         m_videoTab->stopPlayback();
@@ -2034,8 +2181,17 @@ void LyricsDock::buildUi()
             lyrics_renderer_media_clear();
             lyrics_renderer_mv_clear(0);
             if (m_sharedGallery) m_sharedGallery->suspendPlayback();
+            m_currentBgPath.clear(); // Bug A: reset cache so slide bg re-pushes after returning from presentation
         }
         if (m_wsServer) m_wsServer->broadcastPresentationActive(type);
+    });
+    connect(m_pptTab, &PptTab::windowExeChanged, this, [this](const QString &exe){
+        if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return;
+        ServiceItem &item = m_serviceItems[m_activeServiceIdx];
+        if (item.type != ServiceItem::Type::Presentation) return;
+        if (item.windowExe == exe) return;
+        item.windowExe = exe;
+        saveServiceOrder();
     });
 
     // ── Shared gallery media list broadcast ────────────────────
@@ -2109,14 +2265,25 @@ QWidget *LyricsDock::buildSongPanel()
         "border:1px solid #2a5080;border-radius:3px;font-size:12px;padding:0 2px;}"
         "QPushButton:hover{background:#22385a;}");
     connect(lyricsLayoutBtn, &QPushButton::clicked, this, [this](){
-        if (!m_lyricsLayoutDialog) {
-            m_lyricsLayoutDialog = new LayoutDialog("lyrics", window());
-            connect(m_lyricsLayoutDialog, &QObject::destroyed, this,
-                    [this](){ m_lyricsLayoutDialog = nullptr; });
+        if (m_paragraphMode) {
+            if (!m_paragraphLayoutDialog) {
+                m_paragraphLayoutDialog = new LayoutDialog("paragraph", window());
+                connect(m_paragraphLayoutDialog, &QObject::destroyed, this,
+                        [this](){ m_paragraphLayoutDialog = nullptr; });
+            }
+            m_paragraphLayoutDialog->show();
+            m_paragraphLayoutDialog->raise();
+            m_paragraphLayoutDialog->activateWindow();
+        } else {
+            if (!m_lyricsLayoutDialog) {
+                m_lyricsLayoutDialog = new LayoutDialog("lyrics", window());
+                connect(m_lyricsLayoutDialog, &QObject::destroyed, this,
+                        [this](){ m_lyricsLayoutDialog = nullptr; });
+            }
+            m_lyricsLayoutDialog->show();
+            m_lyricsLayoutDialog->raise();
+            m_lyricsLayoutDialog->activateWindow();
         }
-        m_lyricsLayoutDialog->show();
-        m_lyricsLayoutDialog->raise();
-        m_lyricsLayoutDialog->activateWindow();
     });
     hdrL->addWidget(lyricsLayoutBtn);
 
@@ -2877,6 +3044,7 @@ void LyricsDock::loadServiceItemContent(int idx)
     case ServiceItem::Type::Presentation:
         m_paragraphMode = false;
         m_contentStack->setCurrentIndex(2);
+        if (m_pptTab) { m_pptTab->requestShow(0, item.windowExe); m_currentBgPath.clear(); }
         break;
     }
 }
@@ -3280,11 +3448,7 @@ void LyricsDock::onLiveMediaRewind(int svcIdx, int fileIdx)
 
 static void pptEnsureActive(PptTab *pptTab) {
     if (!pptTab) return;
-    if (pptTab->activeType() >= 0) return; // already showing
-    for (int t = 0; t <= 2; ++t) {
-        if (pptTab->isTypeEnabled(t)) { pptTab->requestShow(t); return; }
-    }
-    // No type explicitly enabled yet — default to PowerPoint and auto-enable it
+    if (pptTab->isActive()) return; // already showing (or blanked but still live)
     pptTab->requestShow(0);
 }
 
@@ -3334,7 +3498,7 @@ void LyricsDock::onLivePptPrev(int svcIdx)
 {
     if (!m_pptTab) return;
     // Activate without toggle-off if not already showing for this card
-    if (m_activePptSvcIdx != svcIdx || m_pptTab->activeType() < 0) {
+    if (m_activePptSvcIdx != svcIdx || !m_pptTab->isActive()) {
         // Stop any live media (mutual exclusion)
         if (m_liveMediaPlaying || m_liveMediaPaused) {
             lyrics_renderer_mv_clear();
@@ -3360,7 +3524,7 @@ void LyricsDock::onLivePptNext(int svcIdx)
 {
     if (!m_pptTab) return;
     // Activate without toggle-off if not already showing for this card
-    if (m_activePptSvcIdx != svcIdx || m_pptTab->activeType() < 0) {
+    if (m_activePptSvcIdx != svcIdx || !m_pptTab->isActive()) {
         // Stop any live media (mutual exclusion)
         if (m_liveMediaPlaying || m_liveMediaPaused) {
             lyrics_renderer_mv_clear();
@@ -3424,6 +3588,30 @@ void LyricsDock::showParagraphEditDialog(int serviceIdx)
     bodyEdit->setPlaceholderText(
         "First slide text\n\nSecond slide text\n\nThird slide...");
 
+    // Alternate sentence color row
+    auto *altRow    = new QHBoxLayout;
+    auto *altCheck  = new QCheckBox("Alternate sentence color");
+    altCheck->setChecked(item.altSentenceColor);
+    auto *presetLbl   = new QLabel("Color Preset:");
+    auto *presetCombo = new QComboBox;
+    presetCombo->setStyleSheet(
+        "QComboBox{background:#16161a;color:#eee;border:1px solid #3a3a48;"
+        "border-radius:3px;padding:2px 6px;min-width:60px;}"
+        "QComboBox::drop-down{border:none;}"
+        "QComboBox QAbstractItemView{background:#1e1e24;color:#eee;selection-background-color:#254e7a;}");
+    for (int i = 1; i <= 6; ++i)
+        presetCombo->addItem(QString::number(i), i - 1);
+    int initPreset = (item.altSentencePreset >= 0 && item.altSentencePreset < 6)
+                     ? item.altSentencePreset : 0;
+    presetCombo->setCurrentIndex(initPreset);
+    presetCombo->setEnabled(item.altSentenceColor);
+    connect(altCheck, &QCheckBox::toggled, presetCombo, &QComboBox::setEnabled);
+    altRow->addWidget(altCheck);
+    altRow->addSpacing(10);
+    altRow->addWidget(presetLbl);
+    altRow->addWidget(presetCombo);
+    altRow->addStretch();
+
     auto *btnRow = new QHBoxLayout;
     auto *applyBtn  = new QPushButton("Apply");
     auto *cancelBtn = new QPushButton("Cancel");
@@ -3437,6 +3625,7 @@ void LyricsDock::showParagraphEditDialog(int serviceIdx)
     dlgL->addWidget(titleEdit);
     dlgL->addWidget(bodyLbl);
     dlgL->addWidget(bodyEdit, 1);
+    dlgL->addLayout(altRow);
     dlgL->addLayout(btnRow);
 
     connect(applyBtn,  &QPushButton::clicked, &dlg, &QDialog::accept);
@@ -3444,14 +3633,25 @@ void LyricsDock::showParagraphEditDialog(int serviceIdx)
 
     if (dlg.exec() != QDialog::Accepted) return;
 
-    item.title = titleEdit->text().trimmed();
+    item.title             = titleEdit->text().trimmed();
     if (item.title.isEmpty()) item.title = "Paragraphs";
-    item.text  = bodyEdit->toPlainText();
+    item.text              = bodyEdit->toPlainText();
+    item.altSentenceColor  = altCheck->isChecked();
+    item.altSentencePreset = presetCombo->currentData().toInt();
     updateServiceListItem(serviceIdx);
     saveServiceOrder();
 
-    if (m_activeServiceIdx == serviceIdx)
+    if (m_activeServiceIdx == serviceIdx) {
         loadParagraphSlides(item);
+        // Re-push the active slide so the alt color change takes effect immediately
+        if (m_activeSlide >= 0) {
+            QStringList slides = item.parseSlides();
+            if (m_activeSlide < slides.size()) {
+                applyAltSentenceColor(item);
+                lyrics_renderer_paragraph_push(item.title, slides[m_activeSlide]);
+            }
+        }
+    }
 }
 
 // ── buildMediaPanel ───────────────────────────────────────────
@@ -3539,7 +3739,12 @@ void LyricsDock::loadServiceOrder()
     int savedIdx = obj["activeIndex"].toInt(-1);
     if (savedIdx >= 0 && savedIdx < m_serviceItems.size()) {
         m_serviceList->setCurrentRow(savedIdx);
-        // Don't call loadServiceItemContent here — UI not ready yet
+        m_activeServiceIdx = savedIdx;
+        // For Presentation items: restore the active UI state (enables buttons)
+        // without touching OBS sources — sources are set up when the user interacts
+        // or on the first real requestShow call.
+        if (m_pptTab && m_serviceItems[savedIdx].type == ServiceItem::Type::Presentation)
+            m_pptTab->restoreActiveUi();
     }
 }
 
@@ -3620,6 +3825,7 @@ void LyricsDock::onServiceContextMenu(const QPoint &pos)
             m_serviceItems[row].title = newTitle.trimmed();
             updateServiceListItem(row);
             saveServiceOrder();
+            broadcastSequence();
             // Refresh panel if this section is currently loaded
             if (row == m_activeServiceIdx && !m_liveMode)
                 loadServiceItemContent(row);
@@ -3650,6 +3856,7 @@ void LyricsDock::onSlideClicked(int index)
                     lyrics_renderer_media_push(bgPath, fadeMs);
                     m_currentBgPath = bgPath;
                 }
+                applyAltSentenceColor(item);
                 lyrics_renderer_paragraph_push(item.title, slides[index]);
                 if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[index]);
                 if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
@@ -3776,6 +3983,7 @@ void LyricsDock::onSlideClicked(int index)
                         }
                     }
 
+                    applyAltSentenceColor(svcItem);
                     lyrics_renderer_paragraph_push(svcItem.title, slides[localIdx]);
                     if (m_wsServer) m_wsServer->broadcastScripture(svcItem.title, slides[localIdx]);
                     if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
@@ -3917,6 +4125,7 @@ void LyricsDock::onEditSlideApply()
                 setActiveSlide(saved);
             // Push the updated slide live
             if (!newText.trimmed().isEmpty()) {
+                applyAltSentenceColor(item);
                 lyrics_renderer_paragraph_push(item.title, newText.trimmed());
                 if (m_wsServer) m_wsServer->broadcastScripture(item.title, newText.trimmed());
             }
@@ -3968,23 +4177,20 @@ void LyricsDock::onEditSlideApply()
 void LyricsDock::onExportService()
 {
     QString path = QFileDialog::getSaveFileName(
-        this, "Export Service (Lyrics & Paragraphs)",
+        this, "Export Service",
         QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)
             + "/service_export.json",
         "JSON Files (*.json)");
     if (path.isEmpty()) return;
 
-    QJsonArray items = buildExportServiceJson();
-    QJsonObject root;
-    root["version"] = 1;
-    root["items"]   = items;
-
+    QJsonObject root = buildFullServiceExport();
     QFile f(path);
     if (f.open(QIODevice::WriteOnly)) {
         f.write(QJsonDocument(root).toJson());
         f.close();
         QMessageBox::information(this, "Export Complete",
-            QString("Exported %1 item(s) to:\n%2").arg(items.size()).arg(path));
+            QString("Exported %1 item(s) to:\n%2")
+                .arg(root["items"].toArray().size()).arg(path));
     } else {
         QMessageBox::warning(this, "Export Failed", "Could not write file:\n" + path);
     }
@@ -3993,7 +4199,7 @@ void LyricsDock::onExportService()
 void LyricsDock::onImportService()
 {
     QString path = QFileDialog::getOpenFileName(
-        this, "Import Service (Lyrics & Paragraphs)",
+        this, "Import Service",
         QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
         "JSON Files (*.json)");
     if (path.isEmpty()) return;
@@ -4010,22 +4216,59 @@ void LyricsDock::onImportService()
         return;
     }
 
-    QJsonArray rawItems = doc.object()["items"].toArray();
-    QJsonArray toImport;
-    for (const auto &v : rawItems) {
+    const QJsonObject root = doc.object();
+
+    // Count usable service items
+    int itemCount = 0;
+    for (const auto &v : root["items"].toArray()) {
         if (!v.isObject()) continue;
         const QString t = v.toObject()["type"].toString();
-        if (t == "song" || t == "paragraphs" || t == "paragraph" || t == "scripture")
-            toImport.append(v);
+        if (t == "song" || t == "paragraphs" || t == "paragraph" || t == "scripture" || t == "media")
+            ++itemCount;
     }
-    if (toImport.isEmpty()) {
-        QMessageBox::information(this, "Import", "No lyrics or paragraphs found in file.");
+    if (itemCount == 0) {
+        QMessageBox::information(this, "Import", "No usable items found in file.");
         return;
     }
 
-    importServiceItemsFromRemote(toImport);
+    bool hasLayout   = root.contains("sourceSettings");
+    bool hasGallery  = root["gallery"].isArray();
+    bool hasAudio    = root["audioBin"].isArray();
+    bool hasPresets  = root.contains("colorPresets");
+
+    // Build summary string
+    QStringList summary;
+    summary << QString("%1 service item(s)").arg(itemCount);
+    if (hasGallery)  summary << QString("%1 graphics image(s)").arg(root["gallery"].toArray().size());
+    if (hasAudio)    summary << QString("%1 audio file(s)").arg(root["audioBin"].toArray().size());
+    if (hasPresets)  summary << "color presets";
+    if (hasLayout)   summary << "layout settings";
+
+    // Replace All note: explain if layout is missing
+    QString replaceNote = hasLayout
+        ? "Replace All: clears the current service and restores everything from the file, including font and color layout settings."
+        : "Replace All: clears the current service and restores everything from the file.\n\nNote: this file has no layout settings — your current font, size and color settings will be kept.";
+
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle("Import Service");
+    msgBox.setText("This file contains: " + summary.join(", ") + ".\n\nHow would you like to import it?");
+    msgBox.setInformativeText(
+        replaceNote + "\n\n"
+        "Keep My Layout: replaces the service items only; your current font, colors, gallery and audio are unchanged.");
+
+    QPushButton *replaceAllBtn  = msgBox.addButton("Replace All",    QMessageBox::AcceptRole);
+    QPushButton *keepLayoutBtn  = msgBox.addButton("Keep My Layout", QMessageBox::ActionRole);
+    msgBox.addButton(QMessageBox::Cancel);
+    msgBox.exec();
+
+    QAbstractButton *clicked = msgBox.clickedButton();
+    if (!clicked || clicked == msgBox.button(QMessageBox::Cancel)) return;
+
+    bool replaceLayout = (clicked == replaceAllBtn);
+    applyFullServiceImport(root, replaceLayout);
+
     QMessageBox::information(this, "Import Complete",
-        QString("Imported %1 item(s).").arg(toImport.size()));
+        QString("Imported %1 item(s).").arg(itemCount));
 }
 
 void LyricsDock::onImportFromWeb()
@@ -4118,6 +4361,20 @@ void LyricsDock::onBlackoutClicked()
     updateSlideCounter();
     lyrics_renderer_clear();
     if (m_wsServer) m_wsServer->broadcastClear();
+}
+
+void LyricsDock::applyAltSentenceColor(const ServiceItem &item)
+{
+    if (!item.altSentenceColor || item.altSentencePreset < 0
+        || item.altSentencePreset >= 6 || !m_colorBtn[item.altSentencePreset]) {
+        lyrics_renderer_set_alt_sentence_color(false, 0, 0);
+        return;
+    }
+    QColor fc = m_colorBtn[item.altSentencePreset]->fontColor();
+    QColor oc = m_colorBtn[item.altSentencePreset]->outlineColor();
+    uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() << 8) | (uint32_t)fc.red();
+    uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() << 8) | (uint32_t)oc.red();
+    lyrics_renderer_set_alt_sentence_color(true, fcObs, ocObs);
 }
 
 void LyricsDock::onColorPresetApplied(QColor fontColor, QColor outlineColor)

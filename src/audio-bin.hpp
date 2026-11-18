@@ -15,6 +15,8 @@ public:
     explicit AudioBin(QWidget *parent = nullptr);
     void saveState();
     void loadState();
+    // Replace all files; skips missing files. Used by service import.
+    void setFiles(const QStringList &paths);
     void setWsServer(WebSocketServer *srv) { m_wsServer = srv; }
 
     // Called from LyricsDock when remote sends audioBinPlay command.

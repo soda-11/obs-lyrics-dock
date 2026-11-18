@@ -78,6 +78,8 @@ public:
                           const QString &stateFileName="media-gallery.json");
     void saveState();
     void loadState();
+    // Replace all items; skips missing files. Used by service import.
+    void setItemPaths(const QStringList &paths);
     // Returns the current list of media file paths in this gallery.
     QStringList itemPaths() const;
     // Generate a thumbnail for any media file (image or video) at the given size.
