@@ -1217,7 +1217,11 @@ QJsonObject LyricsDock::buildFullServiceExport() const
     QJsonArray items;
     for (const auto &item : m_segments) {
         if (item.type == Segment::Type::Presentation) continue;
-        items.append(item.toJson());
+        // A paragraph segment owns a COMPLETE layout.  One that was never opened still follows the
+        // default, so write the layout it would use now: the file then carries every paragraph's layout.
+        Segment copy = item;
+        const_cast<LyricsDock *>(this)->ensureParagraphLayout(copy);
+        items.append(copy.toJson());
     }
     root["segments"] = items;
 
@@ -1255,8 +1259,13 @@ void LyricsDock::applyFullServiceImport(const QJsonObject &root, bool replaceLay
         if (root.contains("colorPresets"))
             applyColorPresetsFromJson(root["colorPresets"].toArray());
 
-        if (root.contains("sourceSettings"))
-            applySourceSettingsFromJson(root["sourceSettings"].toString());
+        if (root.contains("sourceSettings")) {
+            // Stored as a JSON string; tolerate a nested object too.
+            const QJsonValue ss = root["sourceSettings"];
+            applySourceSettingsFromJson(ss.isObject()
+                ? QString::fromUtf8(QJsonDocument(ss.toObject()).toJson(QJsonDocument::Compact))
+                : ss.toString());
+        }
 
         if (root["gallery"].isArray()) {
             QStringList paths;
@@ -1328,6 +1337,7 @@ void LyricsDock::applyFullServiceImport(const QJsonObject &root, bool replaceLay
     saveServiceOrder();
     if (replaceLayout) saveState();
     broadcastSequence();
+    publishOnAir();   // the old on-air segment is gone: the remote must not keep it highlighted
 }
 
 void LyricsDock::importSegmentsFromRemote(const QJsonArray &items)
@@ -1375,6 +1385,7 @@ void LyricsDock::importSegmentsFromRemote(const QJsonArray &items)
     rebuildSegmentList();
     saveServiceOrder();
     broadcastSequence();
+    publishOnAir();
 }
 
 QJsonArray LyricsDock::buildServiceOrderJson() const
@@ -4699,20 +4710,23 @@ void LyricsDock::onImportService()
     }
     auto doc = QJsonDocument::fromJson(f.readAll());
     f.close();
-    if (doc.isNull() || !doc.isObject()) {
+    if (doc.isNull() || (!doc.isObject() && !doc.isArray())) {
         QMessageBox::warning(this, "Import Failed", "Invalid JSON file.");
         return;
     }
 
-    const QJsonObject root = doc.object();
+    // Very old exports were a bare list of items.
+    QJsonObject root;
+    if (doc.isArray()) root["segments"] = doc.array();
+    else               root = doc.object();
 
-    // Count usable segments
+    // Count usable segments: every entry Segment::fromJson accepts (it maps old type names and
+    // treats a missing/unknown type as a song), except presentations, which are never imported.
     int itemCount = 0;
     for (const auto &v : segmentsArray(root)) {
         if (!v.isObject()) continue;
-        const QString t = v.toObject()["type"].toString();
-        if (t == "song" || t == "paragraphs" || t == "paragraph" || t == "scripture" || t == "media")
-            ++itemCount;
+        if (v.toObject()["type"].toString() == "presentation") continue;
+        ++itemCount;
     }
     if (itemCount == 0) {
         QMessageBox::information(this, "Import", "No usable items found in file.");
@@ -4807,9 +4821,12 @@ void LyricsDock::onImportFromWeb()
             m_segments << item;
         }
         SongManager::instance().save();
+        m_activeSegIdx = -1;      // the old selection no longer exists
+        clearSlideGrid();
         rebuildSegmentList();
         saveServiceOrder();
         broadcastSequence();
+        publishOnAir();
         QMessageBox::information(this, "Import Complete",
             QString("Service loaded: %1 items.").arg(m_segments.size()));
         return;

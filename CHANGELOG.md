@@ -154,6 +154,62 @@ cannot be added twice). The `videoActivated` signal on the gallery is no longer 
 
 ---
 
+## v12.44.0 — Export / Import service: what is in the file and how each import path behaves  [DONE]
+
+Audit of Export Service / Import Service (File menu), the web-editor import and the remote import.
+
+### EXPORTED (`buildFullServiceExport`, file `version` 2)
+**Service-wide**
+- `linesPerSlide`, `globalFadeMs`
+- `colorPresets` — the 6 presets (font + outline colour)
+- `sourceSettings` — the OBS Lyrics source settings as a JSON string: the global **lyrics layout**, the
+  **default paragraph layout** (template for new segments), fonts / sizes
+- `gallery` — Graphics Bin file paths, in order
+- `audioBin` — Audio Bin file paths, in playlist order
+- `segments` — see below
+
+**Each segment** (Lyrics, Paragraphs, Media; Presentation segments are NOT exported)
+- always: `type` (`song` / `paragraphs` / `media`), `id`, `title`, `artist`, `text`, `filePath`
+- Lyrics: `sourceSongId` (library song id, always written), `sections` (type, label, text, isChinese,
+  showPinyin, showTranslation, pinyin, english), `songKey`, `songTempo`, `songCopyright`
+- Media: `mediaPaths`
+- `cards` — the slide-card queue: `id`, `key` (content fingerprint), `bg` (the card's own background)
+- `defaultBackground`, `colorPresetIdx`, `altSentenceColor`, `altSentencePreset`
+- Paragraphs: `layout` — the segment's complete own layout. A paragraph never opened yet (still following
+  the default) is written with the layout it would use now, so EVERY paragraph carries its layout.
+
+**Not in the file:** Presentation segments (window binding / COM), the song library itself, media files
+(paths only — files must exist at the same place), what is on air, Audio Bin playback settings (none exist),
+confidence-monitor text size (kept in the remote's browser).
+
+### IMPORT — Import Service (`onImportService` → `applyFullServiceImport`)
+- Asks: **Replace All** (also restores colour presets, source/layout settings, Graphics Bin, Audio Bin,
+  lines per slide, fade) or **Keep My Layout** (segments only).
+- Always replaces every non-Presentation segment; existing Presentation segments are kept.
+- Every imported segment and slide card gets NEW ids (`remintIds`), so ids in the file can't clash.
+- A Lyrics segment with no embedded sections is filled from the library by `sourceSongId`.
+- Legacy: `"items"` key; bare top-level array; old type names (`scripture`, `paragraph`, `video`, `music`;
+  a missing/unknown type = song); old Lyrics id → `sourceSongId`; `slideBgs` / section backgrounds →
+  card backgrounds; `windowExe` → `windowTitle`; `sourceSettings` as string or object.
+  A file with no `version` (v1) has all backgrounds and colour presets of segments stripped.
+- The count shown counts every entry except presentations.
+- After import: selection and slide grid reset, queue re-sent, `publishOnAir()` so the remote drops the
+  old highlight.
+
+### IMPORT — web editor (`onImportFromWeb`)
+- A service file (`segments`/`items`) REPLACES the whole service (presentations too); ids re-minted; songs
+  missing from the library are added to it from the embedded sections. A bare array of songs is added
+  to / updated in the library and appended to the service. Now also resets the selection / grid and
+  publishes the on-air state (it did not before).
+
+### IMPORT — from the remote (`importSegmentsFromRemote`)
+- Replaces Lyrics and Paragraph segments only; backgrounds are stripped, colour preset 0, ids re-minted;
+  now also publishes the on-air state.
+
+**Files:** `src/lyrics-dock.cpp`.
+
+---
+
 ## v12.40.0 — Media cards clicked in the plugin highlight their chip  [DONE]
 
 **Bug:** in the Live Preview, the chip was not highlighted when the operator clicked a slide card of a

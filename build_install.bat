@@ -35,7 +35,7 @@ if not exist %MAKENSIS% (
         pause
         exit /b 1
     )
-    echo Installer created: %REPO%installer\OBS-Lyrics-Dock-v12.41.0-Setup.exe
+    echo Installer created: %REPO%installer\OBS-Lyrics-Dock-v12.44.0-Setup.exe
 )
 
 echo.

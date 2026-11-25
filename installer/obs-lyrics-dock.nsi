@@ -1,5 +1,5 @@
 ﻿; ============================================================
-; OBS Lyrics Dock — NSIS Installer  v12.41.0
+; OBS Lyrics Dock — NSIS Installer  v12.44.0
 ; ============================================================
 ; Targets: Windows 10/11 x64
 ; Installs into the OBS Studio plugin directories, auto-detected
@@ -11,8 +11,8 @@ SetCompressor /SOLID lzma
 
 ; ── Plugin metadata ─────────────────────────────────────────
 !define PLUGIN_NAME    "OBS Lyrics Dock"
-!define PLUGIN_VERSION "12.41.0"
-; v12.41.0: Live Preview chip text +50%; confidence monitor text-size buttons
+!define PLUGIN_VERSION "12.44.0"
+; v12.44.0: import clears stale on-air highlight (Live Preview chips +50%, confidence monitor size buttons since 12.41)
 !define PLUGIN_AUTHOR  "OBS Lyrics Dock"
 !define PLUGIN_DLL     "obs-lyrics-dock.dll"
 !define PLUGIN_ID      "obs-lyrics-dock"
@@ -24,7 +24,7 @@ SetCompressor /SOLID lzma
 !include "FileFunc.nsh"
 
 Name              "${PLUGIN_NAME} v${PLUGIN_VERSION}"
-OutFile           "OBS-Lyrics-Dock-v12.41.0-Setup.exe"
+OutFile           "OBS-Lyrics-Dock-v12.44.0-Setup.exe"
 InstallDir        "$PROGRAMFILES64\obs-studio"
 InstallDirRegKey  HKLM "Software\OBS Studio" ""
 
@@ -57,10 +57,10 @@ RequestExecutionLevel admin
 !insertmacro MUI_LANGUAGE "English"
 
 ; ── Version info ────────────────────────────────────────────
-VIProductVersion "12.41.0.0"
+VIProductVersion "12.44.0.0"
 VIAddVersionKey "ProductName"      "${PLUGIN_NAME}"
 VIAddVersionKey "ProductVersion"   "${PLUGIN_VERSION}"
-VIAddVersionKey "FileVersion"      "12.41.0.0"
+VIAddVersionKey "FileVersion"      "12.44.0.0"
 VIAddVersionKey "FileDescription"  "${PLUGIN_NAME} Installer"
 VIAddVersionKey "LegalCopyright"   "© 2026 ${PLUGIN_AUTHOR}"
 

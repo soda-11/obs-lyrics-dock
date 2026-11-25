@@ -1029,7 +1029,7 @@ function handleMsg(msg){
     case 'serviceOrder':
       serviceOrderData=msg.items||[];
       // The queue changed: find the on-air segment again by its id (positions may have moved).
-      if(onAirSegId) onAirSegIdx=lpResolveOnAirIdx(onAirSegIdx);
+      if(onAirSegId) onAirSegIdx=lpResolveOnAirIdx(-1);
       renderServiceList();
       renderLPServiceOrder();
       // Re-render col2 if a non-lyrics service item is currently shown there,
