@@ -18,6 +18,7 @@
 #include <QPushButton>
 #include <QDialogButtonBox>
 #include <QColorDialog>
+#include <QJsonDocument>
 
 // ── OBS ABGR ↔ QColor helpers ─────────────────────────────────
 static QColor obsToQt(long long raw)
@@ -73,6 +74,36 @@ static void setColorBtn(QPushButton *btn, const QColor &c)
     if (btn) applyColorStyle(btn, c);
 }
 
+// ── Where onApply() writes: straight into the OBS settings (the DEFAULT layout), or into a
+// JSON object holding the segment's complete layout.
+struct LayoutSink {
+    obs_data_t  *global = nullptr;   // current global settings (the baseline)
+    obs_data_t  *direct = nullptr;   // global mode: write here
+    QJsonObject *diff   = nullptr;   // segment mode: collect the values here
+    bool         storeAll = false;   // segment mode: store every value (a complete layout)
+
+    void setInt(const std::string &k, long long v) {
+        if (direct) obs_data_set_int(direct, k.c_str(), v);
+        else if (storeAll || obs_data_get_int(global, k.c_str()) != v)
+            diff->insert(QString::fromStdString(k), QJsonValue((qint64)v));
+    }
+    void setBool(const std::string &k, bool v) {
+        if (direct) obs_data_set_bool(direct, k.c_str(), v);
+        else if (storeAll || obs_data_get_bool(global, k.c_str()) != v)
+            diff->insert(QString::fromStdString(k), v);
+    }
+    void setStr(const std::string &k, const QString &v) {
+        if (direct) obs_data_set_string(direct, k.c_str(), v.toUtf8().constData());
+        else if (storeAll || QString::fromUtf8(obs_data_get_string(global, k.c_str())) != v)
+            diff->insert(QString::fromStdString(k), v);
+    }
+    void setDouble(const std::string &k, double v) {
+        if (direct) obs_data_set_double(direct, k.c_str(), v);
+        else if (storeAll || obs_data_get_double(global, k.c_str()) != v)
+            diff->insert(QString::fromStdString(k), v);
+    }
+};
+
 // ── Build one text-box settings group ────────────────────────
 QWidget *LayoutDialog::buildBoxGroup(const QString &groupLabel, BoxRow &row)
 {
@@ -80,6 +111,7 @@ QWidget *LayoutDialog::buildBoxGroup(const QString &groupLabel, BoxRow &row)
     auto *form = new QFormLayout(grp);
     form->setContentsMargins(8, 4, 8, 8);
     form->setSpacing(4);
+    row.form = form;
 
     row.fontFace = new QFontComboBox;
     row.fontFace->setMaximumWidth(220);
@@ -146,7 +178,7 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
     : QDialog(parent), m_tab(tabName)
 {
     QString title = (tabName == "lyrics")     ? "Lyrics Layout"
-                  : (tabName == "paragraph")  ? "Call to Worship Layout"
+                  : (tabName == "paragraph")  ? "Paragraph Layout"
                                               : "Scripture Layout";
     setWindowTitle(title);
     setWindowFlags(Qt::Dialog | Qt::Tool);
@@ -262,8 +294,13 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
 
     auto *btnBox   = new QDialogButtonBox;
     auto *applyBtn = btnBox->addButton("Apply", QDialogButtonBox::ApplyRole);
+    m_resetBtn = btnBox->addButton("Load Default Layout", QDialogButtonBox::ResetRole);
+    m_resetBtn->setToolTip("Fill the form with the current default paragraph layout. Press Apply to keep it.");
+    m_resetBtn->hide();   // only shown in segment mode
+    m_applyBtn = applyBtn;
     btnBox->addButton(QDialogButtonBox::Close);
     connect(applyBtn, &QPushButton::clicked, this, &LayoutDialog::onApply);
+    connect(m_resetBtn, &QPushButton::clicked, this, &LayoutDialog::onResetToGlobal);
     connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::close);
     mainL->addWidget(btnBox);
 
@@ -271,7 +308,40 @@ LayoutDialog::LayoutDialog(const QString &tabName, QWidget *parent)
     loadSettings();
 }
 
+// ── Segment mode ──────────────────────────────────────────────
+void LayoutDialog::setSegmentMode(const QString &segmentTitle, const QByteArray &overrideJson)
+{
+    m_segmentMode = true;
+    m_override    = QJsonDocument::fromJson(overrideJson).object();
+    // Used modally on the stack, so it must not delete itself when it closes.
+    setAttribute(Qt::WA_DeleteOnClose, false);
+    setWindowTitle(QString("Layout for \"%1\" (this segment only)").arg(segmentTitle));
+    if (m_applyBtn) m_applyBtn->setText("Apply to This Segment");
+    if (m_resetBtn) m_resetBtn->show();
+
+    // The body text's colour and outline colour always come from the colour presets.
+    if (m_rows.size() > 1) {
+        BoxRow &body = m_rows[1];
+        for (QWidget *w : { (QWidget *)body.colorBtn, (QWidget *)body.outlineColorBtn }) {
+            if (!w) continue;
+            w->hide();
+            if (body.form)
+                if (QWidget *lbl = body.form->labelForField(w)) lbl->hide();
+        }
+    }
+    loadSettings();
+}
+
+// Segment mode: replace the form's values with the current DEFAULT layout (the segment keeps
+// its own layout until Apply is pressed).
+void LayoutDialog::onResetToGlobal()
+{
+    m_override = QJsonObject();
+    loadSettings();
+}
+
 // ── Read current OBS settings into the dialog ─────────────────
+// In segment mode a value present in m_override wins over the global setting.
 void LayoutDialog::loadSettings()
 {
     obs_source_t *src = lyrics_renderer_get_source();
@@ -279,35 +349,50 @@ void LayoutDialog::loadSettings()
     obs_data_t *s = obs_source_get_settings(src);
     if (!s) return;
 
+    auto I = [&](const std::string &k) -> long long {
+        const QString qk = QString::fromStdString(k);
+        return m_override.contains(qk) ? (long long)m_override.value(qk).toDouble()
+                                       : (long long)obs_data_get_int(s, k.c_str());
+    };
+    auto B = [&](const std::string &k) -> bool {
+        const QString qk = QString::fromStdString(k);
+        return m_override.contains(qk) ? m_override.value(qk).toBool()
+                                       : obs_data_get_bool(s, k.c_str());
+    };
+    auto Str = [&](const std::string &k) -> QString {
+        const QString qk = QString::fromStdString(k);
+        return m_override.contains(qk) ? m_override.value(qk).toString()
+                                       : QString::fromUtf8(obs_data_get_string(s, k.c_str()));
+    };
+
     for (auto &row : m_rows) {
         std::string p = row.prefix;
-        QString face = QString::fromUtf8(
-            obs_data_get_string(s, (p + "font_face").c_str()));
+        QString face = Str(p + "font_face");
         if (!face.isEmpty())
             row.fontFace->setCurrentFont(QFont(face));
-        row.fontSize->setValue((int)obs_data_get_int(s, (p + "font_size").c_str()));
-        row.bold->setChecked  (obs_data_get_bool(s, (p + "bold").c_str()));
-        row.italic->setChecked(obs_data_get_bool(s, (p + "italic").c_str()));
-        row.hAlign->setCurrentIndex((int)obs_data_get_int(s, (p + "align").c_str()));
-        row.vAlign->setCurrentIndex((int)obs_data_get_int(s, (p + "valign").c_str()));
+        row.fontSize->setValue((int)I(p + "font_size"));
+        row.bold->setChecked  (B(p + "bold"));
+        row.italic->setChecked(B(p + "italic"));
+        row.hAlign->setCurrentIndex((int)I(p + "align"));
+        row.vAlign->setCurrentIndex((int)I(p + "valign"));
 
         // Colour / style
         if (row.colorBtn)
-            setColorBtn(row.colorBtn, obsToQt(obs_data_get_int(s, (p + "color").c_str())));
+            setColorBtn(row.colorBtn, obsToQt(I(p + "color")));
         if (row.opacity)
-            row.opacity->setValue((int)obs_data_get_int(s, (p + "opacity").c_str()));
+            row.opacity->setValue((int)I(p + "opacity"));
         if (row.outline)
-            row.outline->setChecked(obs_data_get_bool(s, (p + "outline").c_str()));
+            row.outline->setChecked(B(p + "outline"));
         if (row.outlineSize)
-            row.outlineSize->setValue((int)obs_data_get_int(s, (p + "outline_size").c_str()));
+            row.outlineSize->setValue((int)I(p + "outline_size"));
         if (row.outlineColorBtn)
-            setColorBtn(row.outlineColorBtn, obsToQt(obs_data_get_int(s, (p + "outline_color").c_str())));
+            setColorBtn(row.outlineColorBtn, obsToQt(I(p + "outline_color")));
         if (row.bgCheck)
-            row.bgCheck->setChecked(obs_data_get_bool(s, (p + "bg").c_str()));
+            row.bgCheck->setChecked(B(p + "bg"));
         if (row.bgColorBtn)
-            setColorBtn(row.bgColorBtn, obsToQt(obs_data_get_int(s, (p + "bg_color").c_str())));
+            setColorBtn(row.bgColorBtn, obsToQt(I(p + "bg_color")));
         if (row.bgOpacity)
-            row.bgOpacity->setValue((int)obs_data_get_int(s, (p + "bg_opacity").c_str()));
+            row.bgOpacity->setValue((int)I(p + "bg_opacity"));
     }
 
     if (m_bottomBar)
@@ -326,15 +411,68 @@ void LayoutDialog::loadSettings()
     if (m_chChineseInterval)m_chChineseInterval->setValue(readOrDef("ch_chinese_interval", 100));
     if (m_chEnglishY)       m_chEnglishY->setValue(      readOrDef("ch_english_y",        280));
 
-    if (m_titleH  && m_titleHKey)  m_titleH->setValue( (int)obs_data_get_int(s, m_titleHKey));
-    if (m_hMargin && m_hMarginKey) m_hMargin->setValue((int)obs_data_get_int(s, m_hMarginKey));
+    if (m_titleH  && m_titleHKey)  m_titleH->setValue( (int)I(m_titleHKey));
+    if (m_hMargin && m_hMarginKey) m_hMargin->setValue((int)I(m_hMarginKey));
     if (m_paragraphTextY)
-        m_paragraphTextY->setValue(readOrDef("paragraph_text_y", 0));
+        m_paragraphTextY->setValue(m_override.contains("paragraph_text_y")
+                                   ? m_override.value("paragraph_text_y").toInt()
+                                   : readOrDef("paragraph_text_y", 0));
 
     obs_data_release(s);
 }
 
-// ── Write dialog values back to OBS and trigger re-render ─────
+// ── Collect the dialog values into a sink ─────────────────────
+void LayoutDialog::writeValues(LayoutSink &k) const
+{
+    for (const auto &row : m_rows) {
+        std::string p = row.prefix;
+        // Segment mode: the body text's colours come from the colour presets, never stored here.
+        const bool skipColors = m_segmentMode && m_rows.size() > 1 && &row == &m_rows[1];
+
+        k.setStr (p + "font_face", row.fontFace->currentFont().family());
+        k.setInt (p + "font_size", row.fontSize->value());
+        k.setBool(p + "bold",      row.bold->isChecked());
+        k.setBool(p + "italic",    row.italic->isChecked());
+        k.setInt (p + "align",     row.hAlign->currentIndex());
+        k.setInt (p + "valign",    row.vAlign->currentIndex());
+
+        // Colour / style
+        if (row.colorBtn && !skipColors)
+            k.setInt(p + "color", qtToObs(getColorBtn(row.colorBtn)));
+        if (row.opacity)
+            k.setInt(p + "opacity", row.opacity->value());
+        if (row.outline)
+            k.setBool(p + "outline", row.outline->isChecked());
+        if (row.outlineSize)
+            k.setInt(p + "outline_size", row.outlineSize->value());
+        if (row.outlineColorBtn && !skipColors)
+            k.setInt(p + "outline_color", qtToObs(getColorBtn(row.outlineColorBtn)));
+        if (row.bgCheck)
+            k.setBool(p + "bg", row.bgCheck->isChecked());
+        if (row.bgColorBtn)
+            k.setInt(p + "bg_color", qtToObs(getColorBtn(row.bgColorBtn)));
+        if (row.bgOpacity)
+            k.setInt(p + "bg_opacity", row.bgOpacity->value());
+    }
+
+    if (m_bottomBar)
+        k.setInt("bottom_bar_h", m_bottomBar->value());
+
+    if (m_chPinyinY)        k.setInt("ch_pinyin_y",         m_chPinyinY->value());
+    if (m_chPinyinSpacing)  k.setDouble("ch_pinyin_spacing", m_chPinyinSpacing->value());
+    if (m_chChineseY)       k.setInt("ch_chinese_y",        m_chChineseY->value());
+    if (m_chChineseStripH)  k.setInt("ch_chinese_strip_h",  m_chChineseStripH->value());
+    if (m_chChineseInterval)k.setInt("ch_chinese_interval", m_chChineseInterval->value());
+    if (m_chEnglishY)       k.setInt("ch_english_y",        m_chEnglishY->value());
+
+    if (m_titleH  && m_titleHKey)  k.setInt(m_titleHKey,  m_titleH->value());
+    if (m_hMargin && m_hMarginKey) k.setInt(m_hMarginKey, m_hMargin->value());
+    if (m_paragraphTextY) k.setInt("paragraph_text_y", m_paragraphTextY->value());
+}
+
+// ── Apply ─────────────────────────────────────────────────────
+// Default mode: write to OBS (the default copied into NEW paragraph segments; existing segments
+// are not affected).  Segment mode: return this segment's COMPLETE layout and close.
 void LayoutDialog::onApply()
 {
     obs_source_t *src = lyrics_renderer_get_source();
@@ -342,49 +480,19 @@ void LayoutDialog::onApply()
     obs_data_t *s = obs_source_get_settings(src);
     if (!s) return;
 
-    for (const auto &row : m_rows) {
-        std::string p = row.prefix;
-        obs_data_set_string(s, (p + "font_face").c_str(),
-            row.fontFace->currentFont().family().toUtf8().constData());
-        obs_data_set_int (s, (p + "font_size").c_str(), row.fontSize->value());
-        obs_data_set_bool(s, (p + "bold").c_str(),      row.bold->isChecked());
-        obs_data_set_bool(s, (p + "italic").c_str(),    row.italic->isChecked());
-        obs_data_set_int (s, (p + "align").c_str(),     row.hAlign->currentIndex());
-        obs_data_set_int (s, (p + "valign").c_str(),    row.vAlign->currentIndex());
-
-        // Colour / style
-        if (row.colorBtn)
-            obs_data_set_int(s, (p + "color").c_str(), qtToObs(getColorBtn(row.colorBtn)));
-        if (row.opacity)
-            obs_data_set_int(s, (p + "opacity").c_str(), row.opacity->value());
-        if (row.outline)
-            obs_data_set_bool(s, (p + "outline").c_str(), row.outline->isChecked());
-        if (row.outlineSize)
-            obs_data_set_int(s, (p + "outline_size").c_str(), row.outlineSize->value());
-        if (row.outlineColorBtn)
-            obs_data_set_int(s, (p + "outline_color").c_str(), qtToObs(getColorBtn(row.outlineColorBtn)));
-        if (row.bgCheck)
-            obs_data_set_bool(s, (p + "bg").c_str(), row.bgCheck->isChecked());
-        if (row.bgColorBtn)
-            obs_data_set_int(s, (p + "bg_color").c_str(), qtToObs(getColorBtn(row.bgColorBtn)));
-        if (row.bgOpacity)
-            obs_data_set_int(s, (p + "bg_opacity").c_str(), row.bgOpacity->value());
+    if (m_segmentMode) {
+        QJsonObject all;
+        LayoutSink k{ s, nullptr, &all, true };   // store every value: a complete layout
+        writeValues(k);
+        m_resultJson = all.isEmpty() ? QByteArray()
+                                     : QJsonDocument(all).toJson(QJsonDocument::Compact);
+        obs_data_release(s);
+        accept();
+        return;
     }
 
-    if (m_bottomBar)
-        obs_data_set_int(s, "bottom_bar_h", m_bottomBar->value());
-
-    if (m_chPinyinY)        obs_data_set_int(s, "ch_pinyin_y",         m_chPinyinY->value());
-    if (m_chPinyinSpacing)  obs_data_set_double(s, "ch_pinyin_spacing", m_chPinyinSpacing->value());
-    if (m_chChineseY)       obs_data_set_int(s, "ch_chinese_y",        m_chChineseY->value());
-    if (m_chChineseStripH)  obs_data_set_int(s, "ch_chinese_strip_h",  m_chChineseStripH->value());
-    if (m_chChineseInterval)obs_data_set_int(s, "ch_chinese_interval", m_chChineseInterval->value());
-    if (m_chEnglishY)       obs_data_set_int(s, "ch_english_y",        m_chEnglishY->value());
-
-    if (m_titleH  && m_titleHKey)  obs_data_set_int(s, m_titleHKey,  m_titleH->value());
-    if (m_hMargin && m_hMarginKey) obs_data_set_int(s, m_hMarginKey, m_hMargin->value());
-    if (m_paragraphTextY) obs_data_set_int(s, "paragraph_text_y", m_paragraphTextY->value());
-
+    LayoutSink k{ s, s, nullptr };
+    writeValues(k);
     obs_source_update(src, s);
     obs_data_release(s);
 }

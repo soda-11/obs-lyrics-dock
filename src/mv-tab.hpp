@@ -39,6 +39,7 @@ public slots:
 
 signals:
     void videoStarted();
+    void videoStartedAt(int index);   // which file of the list was started
     void mediaListChanged(const QStringList &paths);
 
 private slots:
@@ -257,6 +258,7 @@ public slots:
 
 signals:
     void playbackStarted();
+    void mediaActivated(int index);   // file index (in the segment's media list) now on air
     void mediaListChanged(const QStringList &paths);
 
 private:

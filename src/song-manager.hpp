@@ -26,7 +26,6 @@ struct LyricsSlide {
     QString pinyin;       // non-empty only when isChinese && showPinyin
     QString english;      // non-empty only when isChinese && showTranslation
     bool    isChinese = false;
-    QString backgroundPath; // effective background (section override → song default → "")
 };
 
 // ── Section ───────────────────────────────────────────────────
@@ -34,7 +33,9 @@ struct LyricsSection {
     SectionType type  = SectionType::Verse;
     QString     label;
 
-    QString     backgroundPath; // optional background media (empty = inherit song default)
+    // Read from files written before v12.27.0 only; never written.  Backgrounds now live on
+    // slide cards (Segment::cards), so Segment::syncCards() moves this value there and clears it.
+    QString     legacyBackgroundPath;
 
     // ── English mode (isChinese == false) ─────────────────────
     QString     text;   // English lyrics — blank line = slide break
@@ -63,7 +64,6 @@ struct Song {
     QString              key;
     QString              tempo;
     QString              copyright;
-    QString              backgroundPath; // default background for all sections of this song
     QList<LyricsSection> sections;
 
     // Returns all slides across all sections.
@@ -79,6 +79,12 @@ public:
     static SongManager &instance();
     void load();
     void save();
+    // The library file is versioned (songs.json = {"version":2,"songs":[...]}).  A
+    // version-1 file (bare array, had backgrounds) is upgraded once: the original is kept
+    // as songs.v1.bak.json, then the file is rewritten without backgrounds.
+    void ensureCurrent();
+    // Replace the song with the same id, or add it when that id is not in the library.
+    void upsertSong(const Song &s);
     const QList<Song> &songs() const { return m_songs; }
     Song *findById(const QString &id);
     void addSong(const Song &s);
@@ -88,5 +94,6 @@ public:
 private:
     SongManager() = default;
     QList<Song> m_songs;
+    int m_diskVersion = 2; // version of songs.json as read (1 = old bare array)
     QString dataPath() const;
 };

@@ -238,7 +238,7 @@ static void onFrontendEvent(enum obs_frontend_event event, void *)
 
 MODULE_EXPORT bool obs_module_load()
 {
-    blog(LOG_INFO, "[obs-lyrics-dock] Loading v12.24.0");
+    blog(LOG_INFO, "[obs-lyrics-dock] Loading v12.41.0");
 
     // Capture module data path while obs_current_module() is valid.
     // obs_get_module_data_path() can return a relative path (e.g.
@@ -337,7 +337,7 @@ MODULE_EXPORT bool obs_module_load()
         loadHotkeyBindings();
     }
 
-    blog(LOG_INFO, "[obs-lyrics-dock] Registered v12.24.0");
+    blog(LOG_INFO, "[obs-lyrics-dock] Registered v12.41.0");
     return true;
 }
 

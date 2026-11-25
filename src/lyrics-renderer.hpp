@@ -3,6 +3,7 @@
 
 #include <obs-module.h>
 #include <QString>
+#include <QByteArray>
 
 void lyrics_renderer_register();
 
@@ -23,6 +24,10 @@ void lyrics_renderer_clear();
 // ── Lyrics-tab Media API ───────────────────────────────────────
 // fadeMs: crossfade duration in ms (0 = instant cut)
 void lyrics_renderer_media_push(const QString &filePath, int fadeMs);
+// True while a background pushed with lyrics_renderer_media_push is showing (a music-video
+// MV video does not count: lyrics are meant to sit over it).  Used so a slide with no background
+// of its own can clear a background the plugin has lost track of.
+bool lyrics_renderer_media_background_active();
 void lyrics_renderer_media_clear(int fadeMs = 0);
 
 bool lyrics_renderer_media_get_time(int64_t &timeMs,
@@ -42,8 +47,18 @@ void lyrics_renderer_scripture_clear();
 // font/layout settings so each tab can have its own look.
 void lyrics_renderer_paragraph_push(const QString &title, const QString &text);
 void lyrics_renderer_paragraph_clear();
-void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor);
+// Colour setters.  repush=false only stores the colours for the NEXT push and does not re-render
+// what is on air (used when a segment is merely selected, so the on-air slide is not recoloured).
+void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor, bool repush = true);
 void lyrics_renderer_set_alt_sentence_color(bool enabled, uint32_t fontColor, uint32_t outlineColor);
+// Per-segment paragraph layout: a JSON object of settings (same keys as the global paragraph
+// layout, e.g. paragraph_text_font_size) that override the global ones for the paragraph now
+// on air.  Empty = use the global layout.  Re-renders the current slide only if it changed.
+void lyrics_renderer_set_paragraph_layout(const QByteArray &overrideJson);
+// The current DEFAULT paragraph layout (the global Paragraph Layout dialog) as a complete JSON
+// object, ready to be copied into a paragraph segment.  Body-text colours are not included
+// (they come from the colour presets).  Empty when no Lyrics source exists yet.
+QByteArray lyrics_renderer_paragraph_layout_snapshot();
 
 // ── Settings access (used by LayoutDialog) ─────────────────────
 // Returns the first active OBS source instance, or nullptr if none.
@@ -102,10 +117,10 @@ void lyrics_renderer_qr_hide();
 
 // ── Color API ──────────────────────────────────────────────────
 // fontColor / outlineColor: 0x00BBGGRR  (Windows COLORREF / OBS text-gdiplus format)
-void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor);
+void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor, bool repush = true);
 void lyrics_renderer_set_scripture_text_color(uint32_t fontColor, uint32_t outlineColor);
 // Chinese mode: set Chinese character + translation color (used by color presets 1-3)
-void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor);
+void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor, bool repush = true);
 // Chinese mode: set pinyin color (used by color presets 4-5)
 void lyrics_renderer_set_pinyin_color(uint32_t fontColor, uint32_t outlineColor);
 

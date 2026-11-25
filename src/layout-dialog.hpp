@@ -3,6 +3,8 @@
 
 #include <QDialog>
 #include <QString>
+#include <QByteArray>
+#include <QJsonObject>
 #include <vector>
 
 class QSpinBox;
@@ -11,6 +13,8 @@ class QCheckBox;
 class QComboBox;
 class QFontComboBox;
 class QPushButton;
+class QFormLayout;
+struct LayoutSink;   // defined in layout-dialog.cpp
 
 class LayoutDialog : public QDialog {
     Q_OBJECT
@@ -18,11 +22,21 @@ public:
     // tabName: "lyrics" | "paragraph" | "scripture"
     explicit LayoutDialog(const QString &tabName, QWidget *parent = nullptr);
 
+    // Segment mode (paragraph only; create on the stack and use exec()).  The dialog edits ONE
+    // segment's layout as overrides on top of the global default.  `overrideJson` = that
+    // segment's current overrides ("" = none).
+    void setSegmentMode(const QString &segmentTitle, const QByteArray &overrideJson);
+    // After exec() returned Accepted: JSON of only the settings that differ from the global
+    // default ("" = this segment follows the global layout completely).
+    QByteArray segmentLayoutJson() const { return m_resultJson; }
+
 private slots:
     void onApply();
+    void onResetToGlobal();
 
 private:
     struct BoxRow {
+        QFormLayout   *form           = nullptr;
         const char    *prefix         = nullptr;
         QFontComboBox *fontFace       = nullptr;
         QSpinBox      *fontSize       = nullptr;
@@ -43,8 +57,14 @@ private:
 
     QWidget *buildBoxGroup(const QString &groupLabel, BoxRow &row);
     void loadSettings();
+    void writeValues(LayoutSink &k) const;
 
     QString             m_tab;
+    bool                m_segmentMode = false;
+    QJsonObject         m_override;      // segment mode: the segment's current overrides
+    QByteArray          m_resultJson;    // segment mode: result after Apply
+    QPushButton        *m_applyBtn = nullptr;
+    QPushButton        *m_resetBtn = nullptr;
     std::vector<BoxRow> m_rows;
 
     // Lyrics layout

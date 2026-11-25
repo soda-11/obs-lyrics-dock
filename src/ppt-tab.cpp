@@ -182,6 +182,93 @@ static IDispatch *getPptActiveView()
     return result;
 }
 
+// Item(i) of a COM collection as an IDispatch*, or nullptr.  Caller must Release().
+static IDispatch *pptItem(IDispatch *coll, int i)
+{
+    if (!coll) return nullptr;
+    DISPID id = 0;
+    if (FAILED(pptId(coll, L"Item", id))) return nullptr;
+    VARIANT vArg; VariantInit(&vArg); V_VT(&vArg) = VT_I4; V_I4(&vArg) = i;
+    DISPPARAMS dp{ &vArg, nullptr, 1, 0 };
+    VARIANT vRes; VariantInit(&vRes);
+    HRESULT hr = coll->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT,
+                              DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+                              &dp, &vRes, nullptr, nullptr);
+    if (FAILED(hr) || V_VT(&vRes) != VT_DISPATCH || !V_DISPATCH(&vRes)) {
+        VariantClear(&vRes);
+        return nullptr;
+    }
+    IDispatch *r = V_DISPATCH(&vRes);
+    V_VT(&vRes) = VT_EMPTY;
+    return r;
+}
+
+static QString pptStr(IDispatch *p, LPCWSTR name)
+{
+    if (!p) return {};
+    DISPID id; if (FAILED(pptId(p, name, id))) return {};
+    DISPPARAMS dp{}; VARIANT v; VariantInit(&v);
+    if (FAILED(p->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT,
+               DISPATCH_PROPERTYGET, &dp, &v, nullptr, nullptr))) return {};
+    VARIANT vs; VariantInit(&vs); QString r;
+    if (SUCCEEDED(VariantChangeType(&vs, &v, 0, VT_BSTR)) && V_BSTR(&vs))
+        r = QString::fromWCharArray(V_BSTR(&vs));
+    VariantClear(&vs); VariantClear(&v);
+    return r;
+}
+
+// Finds the open presentation that owns the captured window.  Pass 1: its slide
+// show window HWND equals the captured HWND.  Pass 2: the captured window's title
+// contains the presentation's file name (edit window / presenter view).  Returns
+// nullptr when no deck matches.  Caller must Release().
+static IDispatch *findPptForWindow(IDispatch *app, HWND hwnd, const QString &title)
+{
+    if (!app) return nullptr;
+    IDispatch *presColl = pptObj(app, L"Presentations");
+    if (!presColl) return nullptr;
+    int count = pptInt(presColl, L"Count");
+    IDispatch *result = nullptr;
+    for (int pass = 0; pass < 2 && !result; ++pass) {
+        for (int i = 1; i <= count && !result; ++i) {
+            IDispatch *pres = pptItem(presColl, i);
+            if (!pres) continue;
+            bool match = false;
+            if (pass == 0) {
+                if (hwnd) {
+                    IDispatch *ss = pptObj(pres, L"SlideShowWindow");
+                    if (ss) {
+                        match = ((HWND)(INT_PTR)pptInt(ss, L"HWND") == hwnd);
+                        ss->Release();
+                    }
+                }
+            } else {
+                const QString name = pptStr(pres, L"Name");
+                const QString base = QFileInfo(name).completeBaseName();
+                match = (!name.isEmpty() && title.contains(name, Qt::CaseInsensitive))
+                     || (!base.isEmpty() && title.contains(base, Qt::CaseInsensitive));
+            }
+            if (match) result = pres; else pres->Release();
+        }
+    }
+    presColl->Release();
+    return result;
+}
+
+// Edit-mode view (the deck's first document window).  Caller must Release().
+static IDispatch *pptEditView(IDispatch *app, IDispatch *deck)
+{
+    IDispatch *win = nullptr;
+    if (deck) {
+        IDispatch *wins = pptObj(deck, L"Windows");
+        if (wins) { win = pptItem(wins, 1); wins->Release(); }
+    }
+    if (!win) win = pptObj(app, L"ActiveWindow");
+    if (!win) return nullptr;
+    IDispatch *view = pptObj(win, L"View");
+    win->Release();
+    return view;
+}
+
 // ── Window enumeration ────────────────────────────────────────
 
 struct EnumWinCtx { QList<WinInfo> *list; };
@@ -366,11 +453,29 @@ void PptTab::buildUi()
 
     updateConnectBtnStyle();
     connect(m_winCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx){
+        if (m_programmatic) return; // selection made by code never overwrites the item
         if (idx > 0 && idx - 1 < m_windows.size()) {
-            emit windowExeChanged(m_windows[idx - 1].title);
+            const WinInfo &wi = m_windows[idx - 1];
+            m_binding.title = wi.title;
+            m_binding.exe   = wi.exe;
+            m_binding.cls   = wi.cls;
+            m_hasBinding    = true;
+            m_unresolved    = false;
+            emit windowChosen(wi.title, wi.exe, wi.cls);
             // Immediately update the OBS source so the preview refreshes without
             // requiring the user to click away and back.
-            if (m_active) updateCaptureSource();
+            if (m_active) {
+                updateCaptureSource();
+                if (!m_blank) ensureInScene();
+            }
+            // COM follows the window: auto mode connects for PowerPoint windows
+            // and disconnects for anything else.
+            if (m_binding.comMode != 0) {
+                bool isPpt = selectedIsPpt();
+                m_comWanted = isPpt;
+                if (isPpt && !m_pptConnected) connectCom();
+                else if (!isPpt && m_pptConnected) disconnectCom();
+            }
         }
     });
     connect(m_prevBtn,  &QPushButton::clicked, this, &PptTab::onPrev);
@@ -380,32 +485,138 @@ void PptTab::buildUi()
 
 // ── Window scanning ───────────────────────────────────────────
 
-void PptTab::scanWindows()
+void PptTab::rebuildWindowList(bool keepSelection)
 {
+    HWND prevHwnd = keepSelection ? selectedHwnd() : nullptr;
+
     QList<WinInfo> wins;
     EnumWinCtx ctx{ &wins };
     EnumWindows(enumWinCb, reinterpret_cast<LPARAM>(&ctx));
     m_windows = wins;
 
-    QString prevText = m_winCombo->currentIndex() > 0
-                       ? m_winCombo->currentText() : QString();
-    QSignalBlocker blk(m_winCombo);
-    m_winCombo->clear();
-    m_winCombo->addItem("(Select window…)");
-    for (const auto &wi : m_windows) {
-        QString label = wi.title;
-        if (!wi.exe.isEmpty()) label += "  —  " + wi.exe;
-        m_winCombo->addItem(label);
-        m_winCombo->setItemData(m_winCombo->count() - 1, wi.title, Qt::ToolTipRole);
+    ++m_programmatic;
+    {
+        QSignalBlocker blk(m_winCombo);
+        m_winCombo->clear();
+        m_winCombo->addItem("(Select window…)");
+        for (const auto &wi : m_windows) {
+            QString label = wi.title;
+            if (!wi.exe.isEmpty()) label += "  —  " + wi.exe;
+            m_winCombo->addItem(label);
+            m_winCombo->setItemData(m_winCombo->count() - 1, wi.title, Qt::ToolTipRole);
+        }
+        if (prevHwnd) {
+            for (int i = 0; i < m_windows.size(); ++i)
+                if (m_windows[i].hwnd == prevHwnd) { m_winCombo->setCurrentIndex(i + 1); break; }
+        }
     }
-    if (!prevText.isEmpty()) {
-        int idx = m_winCombo->findText(prevText);
-        if (idx >= 0) m_winCombo->setCurrentIndex(idx);
-    }
-    autoSelectWindow({});
+    --m_programmatic;
 }
 
-void PptTab::onScanWindows() { scanWindows(); }
+// Fresh window detection (no saved window): PowerPoint slide show / exe when COM is
+// connected, otherwise the first non-OBS window.
+int PptTab::autoDetectIndex() const
+{
+    bool preferPpt = m_pptConnected;
+    int bestIdx = -1;
+    for (int i = 0; i < m_windows.size(); ++i) {
+        const WinInfo &wi = m_windows[i];
+        if (preferPpt) {
+            if (wi.title.startsWith("PowerPoint Slide Show", Qt::CaseInsensitive))
+                return i;
+            if (wi.exe.compare("POWERPNT.EXE", Qt::CaseInsensitive) == 0 && bestIdx < 0)
+                bestIdx = i;
+        } else {
+            if (!wi.exe.contains("obs", Qt::CaseInsensitive) && bestIdx < 0)
+                bestIdx = i;
+        }
+    }
+    return bestIdx;
+}
+
+// Number of matching characters at the start plus at the end of a and b.
+static int sharedEdgeLen(const QString &a, const QString &b)
+{
+    int n = qMin(a.size(), b.size());
+    int pre = 0;
+    while (pre < n && a[pre] == b[pre]) ++pre;
+    int suf = 0;
+    while (suf < n - pre && a[a.size() - 1 - suf] == b[b.size() - 1 - suf]) ++suf;
+    return pre + suf;
+}
+
+// Maps a saved window (title, exe, class) onto the current window list.
+// 1) exact title  2) same exe + class, best title similarity (titles drift: Chrome
+// tab names, PowerPoint file names)  3) legacy items that saved only an exe name.
+int PptTab::findWindowFor(const PptBinding &b) const
+{
+    if (b.title.isEmpty() && b.exe.isEmpty()) return -1;
+
+    for (int i = 0; i < m_windows.size(); ++i) {
+        if (m_windows[i].title != b.title) continue;
+        if (b.exe.isEmpty() || m_windows[i].exe.compare(b.exe, Qt::CaseInsensitive) == 0)
+            return i;
+    }
+
+    if (!b.exe.isEmpty()) {
+        int best = -1, bestScore = -1, candidates = 0;
+        for (int i = 0; i < m_windows.size(); ++i) {
+            const WinInfo &wi = m_windows[i];
+            if (wi.exe.compare(b.exe, Qt::CaseInsensitive) != 0) continue;
+            if (!b.cls.isEmpty() && wi.cls != b.cls) continue;
+            ++candidates;
+            int score = sharedEdgeLen(wi.title, b.title);
+            if (score > bestScore) { bestScore = score; best = i; }
+        }
+        // With several look-alike windows a zero-similarity guess is worse than none.
+        if (best >= 0 && (candidates == 1 || bestScore > 0)) return best;
+        return -1;
+    }
+
+    // Legacy: before v12.23.0 only the exe name was saved (stored in the title field).
+    for (int i = 0; i < m_windows.size(); ++i)
+        if (m_windows[i].exe.compare(b.title, Qt::CaseInsensitive) == 0)
+            return i;
+    return -1;
+}
+
+QString PptTab::selectedTitle() const
+{
+    int idx = m_winCombo->currentIndex() - 1;
+    return (idx >= 0 && idx < m_windows.size()) ? m_windows[idx].title : QString();
+}
+
+bool PptTab::selectedIsPpt() const
+{
+    int idx = m_winCombo->currentIndex() - 1;
+    return idx >= 0 && idx < m_windows.size()
+        && m_windows[idx].exe.compare("POWERPNT.EXE", Qt::CaseInsensitive) == 0;
+}
+
+// Used when no Presentation item is bound (manual use of the tab).
+void PptTab::scanWindows()
+{
+    rebuildWindowList(true);
+    if (m_winCombo->currentIndex() <= 0) {
+        int idx = autoDetectIndex();
+        if (idx >= 0) {
+            ++m_programmatic;
+            QSignalBlocker blk(m_winCombo);
+            m_winCombo->setCurrentIndex(idx + 1);
+            --m_programmatic;
+        }
+    }
+}
+
+void PptTab::onScanWindows()
+{
+    if (m_hasBinding) {
+        rebuildWindowList(true);
+        if (m_unresolved) applyBinding();
+    } else {
+        scanWindows();
+    }
+}
 
 void PptTab::updateConnectBtnStyle()
 {
@@ -419,17 +630,36 @@ void PptTab::updateConnectBtnStyle()
     }
 }
 
+void PptTab::disconnectCom()
+{
+    m_pptConnected = false;
+    updateConnectBtnStyle();
+    m_curSlide = 0; m_totSlides = 0;
+    m_slideCtr->setText("— / —");
+    m_navStatusLbl->setText("PowerPoint COM disconnected.");
+    updateNavUi();
+}
+
+// User clicked the COM button: toggle, and remember the choice on the bound item.
 void PptTab::onConnectPpt()
 {
     if (m_pptConnected) {
-        m_pptConnected = false;
-        updateConnectBtnStyle();
-        m_curSlide = 0; m_totSlides = 0;
-        m_slideCtr->setText("— / —");
-        m_navStatusLbl->setText("PowerPoint COM disconnected.");
-        updateNavUi();
+        m_comWanted = false;
+        m_binding.comMode = 0;
+        disconnectCom();
+        emit comModeChanged(0);
         return;
     }
+    if (connectCom()) {
+        m_comWanted = true;
+        m_binding.comMode = 1;
+        emit comModeChanged(1);
+    }
+}
+
+bool PptTab::connectCom()
+{
+    if (m_pptConnected) return true;
 
     // Validate: selected window should be POWERPNT.EXE
     int idx = m_winCombo->currentIndex() - 1;
@@ -440,7 +670,7 @@ void PptTab::onConnectPpt()
                 QString("<span style='color:#ff8888;'>Selected window is not PowerPoint "
                         "(%1). Select a POWERPNT.EXE window first.</span>").arg(exe));
             m_navStatusLbl->setTextFormat(Qt::RichText);
-            return;
+            return false;
         }
     }
 
@@ -459,7 +689,7 @@ void PptTab::onConnectPpt()
             QString("<span style='color:#ff8888;'>Step 3 FAIL: CLSIDFromProgID hr=0x%1 "
                     "(PowerPoint not installed?)</span>").arg((uint)hr, 8, 16, QChar('0')));
         m_navStatusLbl->setTextFormat(Qt::RichText);
-        return;
+        return false;
     }
 
     // Step 4: get running instance from ROT
@@ -477,7 +707,7 @@ void PptTab::onConnectPpt()
             QString("<span style='color:#ff8888;'>Step 4 FAIL: GetActiveObject hr=0x%1%2</span>")
             .arg((uint)hr, 8, 16, QChar('0')).arg(hint));
         m_navStatusLbl->setTextFormat(Qt::RichText);
-        return;
+        return false;
     }
 
     // Step 5: QI to IDispatch
@@ -490,7 +720,7 @@ void PptTab::onConnectPpt()
             QString("<span style='color:#ff8888;'>Step 5 FAIL: QueryInterface IDispatch hr=0x%1</span>")
             .arg((uint)hr, 8, 16, QChar('0')));
         m_navStatusLbl->setTextFormat(Qt::RichText);
-        return;
+        return false;
     }
     app->Release();
     if (coInitedHere) CoUninitialize();
@@ -504,51 +734,9 @@ void PptTab::onConnectPpt()
                 "(CoInit hr=0x%1). Slide counter updates every 500 ms.</span>")
         .arg((uint)hrCo, 8, 16, QChar('0')));
     m_navStatusLbl->setTextFormat(Qt::RichText);
+    return true;
 }
 
-void PptTab::autoSelectWindow(const QString &preferredExe)
-{
-    // When a preferred exe is set (switching to a saved presentation item) we
-    // must force-select the matching window even if the combo already has a
-    // selection from a different item — otherwise both items share one window.
-    if (m_winCombo->currentIndex() > 0 && preferredExe.isEmpty()) return;
-
-    // Priority 1: match by exact window title (unique even when multiple windows share an exe)
-    if (!preferredExe.isEmpty()) {
-        for (int i = 0; i < m_windows.size(); ++i) {
-            if (m_windows[i].title == preferredExe) {
-                m_winCombo->setCurrentIndex(i + 1);
-                return;
-            }
-        }
-        // Fall back to exe match for items saved before v12.23.0
-        for (int i = 0; i < m_windows.size(); ++i) {
-            if (m_windows[i].exe.compare(preferredExe, Qt::CaseInsensitive) == 0) {
-                m_winCombo->setCurrentIndex(i + 1);
-                return;
-            }
-        }
-    }
-
-    // Priority 2: PPT slide show window / exe, or any non-OBS window
-    bool preferPpt = m_pptConnected;
-    int bestIdx = -1;
-    for (int i = 0; i < m_windows.size(); ++i) {
-        const WinInfo &wi = m_windows[i];
-        if (preferPpt) {
-            if (wi.title.startsWith("PowerPoint Slide Show", Qt::CaseInsensitive)) {
-                bestIdx = i; break;
-            }
-            if (wi.exe.compare("POWERPNT.EXE", Qt::CaseInsensitive) == 0 && bestIdx < 0)
-                bestIdx = i;
-        } else {
-            if (!wi.exe.contains("obs", Qt::CaseInsensitive) && bestIdx < 0)
-                bestIdx = i;
-        }
-    }
-    if (bestIdx >= 0)
-        m_winCombo->setCurrentIndex(bestIdx + 1);
-}
 
 // ── Activate / deactivate ─────────────────────────────────────
 
@@ -617,39 +805,90 @@ void PptTab::restoreActiveUi()
 
 // ── Remote-triggered activation ───────────────────────────────
 
-void PptTab::requestShow(int type, const QString &windowExe)
+void PptTab::setBinding(const PptBinding &b)
+{
+    m_binding    = b;
+    m_hasBinding = true;
+}
+
+// Bind a Presentation segment to the shared capture source.
+// The item's saved window is the only source of truth: the previous item's
+// selection is never inherited, and a window that cannot be found leaves the
+// source blank (with a warning) instead of showing another item's window.
+void PptTab::bindItem(const PptBinding &b)
+{
+    m_binding    = b;
+    m_hasBinding = true;
+
+    // The slide counter belongs to the previous item until the next poll.
+    m_curSlide = 0; m_totSlides = 0; m_presTitle.clear();
+    m_slideCtr->setText("— / —");
+
+    rebuildWindowList(false);
+    applyBinding();
+}
+
+// Resolve m_binding against the current window list and apply it: select the
+// window, set COM on/off, retarget the capture source, show.  Returns false when
+// the saved window is not open (source blanked, poll retries).
+bool PptTab::applyBinding()
+{
+    const bool alreadyWaiting = m_unresolved && m_active; // poll retry, nothing new to announce
+    int idx = findWindowFor(m_binding);
+    // Brand-new item with nothing saved yet: detect fresh (never inherited).
+    if (idx < 0 && m_binding.title.isEmpty() && m_binding.exe.isEmpty())
+        idx = autoDetectIndex();
+
+    ++m_programmatic;
+    {
+        QSignalBlocker blk(m_winCombo);
+        m_winCombo->setCurrentIndex(idx >= 0 ? idx + 1 : 0);
+    }
+    --m_programmatic;
+    m_unresolved = (idx < 0);
+
+    // COM follows the window and the item's choice (-1 auto, 0 off, 1 on).
+    const bool isPpt = selectedIsPpt();
+    m_comWanted = isPpt && m_binding.comMode != 0;
+    if (!m_comWanted && m_pptConnected)      disconnectCom();
+    else if (m_comWanted && !m_pptConnected) connectCom();
+
+    if (m_unresolved) {
+        m_active = true;
+        m_blank  = false;
+        hideFromScene();   // clears the window target so no stale window shows
+        updateBlankBtnStyle();
+        updateNavUi();
+        QString what = m_binding.title.isEmpty() ? m_binding.exe : m_binding.title;
+        m_navStatusLbl->setText(
+            what.isEmpty()
+            ? QString("<span style='color:#ffcc66;'>No window selected for this "
+                      "presentation — pick one above.</span>")
+            : QString("<span style='color:#ffcc66;'>Window not found: %1 "
+                      "(will attach when it opens)</span>").arg(what.toHtmlEscaped()));
+        m_navStatusLbl->setTextFormat(Qt::RichText);
+        if (!alreadyWaiting) emit showSlidesRequested(0);
+        return false;
+    }
+
+    activatePresentation();
+    return true;
+}
+
+void PptTab::requestShow(int type)
 {
     if (type < 0) {
         if (m_active) deactivatePresentation();
         return;
     }
-    // Scan windows; if windowExe is set, prefer that exe for auto-selection
-    if (m_winCombo->currentIndex() <= 0 || !windowExe.isEmpty()) {
-        // Re-scan so we can try to match the preferred exe
-        QList<WinInfo> wins;
-        EnumWinCtx ctx{ &wins };
-        EnumWindows(enumWinCb, reinterpret_cast<LPARAM>(&ctx));
-        m_windows = wins;
-
-        QString prevText = m_winCombo->currentIndex() > 0
-                           ? m_winCombo->currentText() : QString();
-        QSignalBlocker blk(m_winCombo);
-        m_winCombo->clear();
-        m_winCombo->addItem("(Select window…)");
-        for (const auto &wi : m_windows) {
-            QString label = wi.title;
-            if (!wi.exe.isEmpty()) label += "  —  " + wi.exe;
-            m_winCombo->addItem(label);
-            m_winCombo->setItemData(m_winCombo->count() - 1, wi.title, Qt::ToolTipRole);
-        }
-        // Restore previous selection if still present; otherwise auto-select
-        if (!prevText.isEmpty()) {
-            int idx = m_winCombo->findText(prevText);
-            if (idx >= 0) m_winCombo->setCurrentIndex(idx);
-        }
-        autoSelectWindow(windowExe);
+    if (m_hasBinding) {
+        // Re-show the bound item (blank state cleared); re-resolve its window.
+        rebuildWindowList(false);
+        applyBinding();
+        return;
     }
-
+    // No Presentation item bound (manual use of the tab).
+    if (m_winCombo->currentIndex() <= 0) scanWindows();
     activatePresentation(); // always clears blank state and shows
 }
 
@@ -879,32 +1118,38 @@ void PptTab::sendKeyToActive(int vkey)
     }
 }
 
-IDispatch *PptTab::getPptView() const { return getPptActiveView(); }
+// Slide show view of the deck that owns the captured window.  If that deck is
+// found but not in slide show mode this returns nullptr (it never falls over to
+// a different deck).  Only when no deck matches the window does it use the legacy
+// "first deck with a slide show" lookup.  Caller must Release().
+IDispatch *PptTab::getPptView() const
+{
+    IDispatch *app = getPptApp();
+    if (!app) return nullptr;
+    IDispatch *deck = findPptForWindow(app, selectedHwnd(), selectedTitle());
+    app->Release();
+    if (!deck) return getPptActiveView();
+    IDispatch *view = nullptr;
+    IDispatch *ss = pptObj(deck, L"SlideShowWindow");
+    if (ss) { view = pptObj(ss, L"View"); ss->Release(); }
+    deck->Release();
+    return view;
+}
 
 void PptTab::nextSlide()
 {
-    if (m_pptConnected) {
-        int idx = m_winCombo->currentIndex() - 1;
-        bool isPptWindow = idx >= 0 && idx < m_windows.size() &&
-                           m_windows[idx].exe.contains("POWERPNT", Qt::CaseInsensitive);
-        if (isPptWindow) {
-            IDispatch *v = getPptView();
-            if (v) { pptCall(v, L"Next"); v->Release(); return; }
-        }
+    if (m_pptConnected && selectedIsPpt()) {
+        IDispatch *v = getPptView();
+        if (v) { pptCall(v, L"Next"); v->Release(); return; }
     }
     sendKeyToActive(VK_RIGHT);
 }
 
 void PptTab::prevSlide()
 {
-    if (m_pptConnected) {
-        int idx = m_winCombo->currentIndex() - 1;
-        bool isPptWindow = idx >= 0 && idx < m_windows.size() &&
-                           m_windows[idx].exe.contains("POWERPNT", Qt::CaseInsensitive);
-        if (isPptWindow) {
-            IDispatch *v = getPptView();
-            if (v) { pptCall(v, L"Previous"); v->Release(); return; }
-        }
+    if (m_pptConnected && selectedIsPpt()) {
+        IDispatch *v = getPptView();
+        if (v) { pptCall(v, L"Previous"); v->Release(); return; }
     }
     sendKeyToActive(VK_LEFT);
 }
@@ -912,18 +1157,16 @@ void PptTab::prevSlide()
 void PptTab::gotoSlide(int n)
 {
     if (n < 1) return;
-    if (m_pptConnected) {
+    if (m_pptConnected && selectedIsPpt()) {
         if (IDispatch *v = getPptView()) {
             pptCallInt(v, L"GotoSlide", n); v->Release(); return;
         }
-        // Slideshow not active — try edit mode GotoSlide via ActiveWindow.View
+        // Slideshow not active — edit-mode GotoSlide on the matching deck's window
         if (IDispatch *app = getPptApp()) {
-            IDispatch *activeWin = pptObj(app, L"ActiveWindow");
-            if (activeWin) {
-                IDispatch *editView = pptObj(activeWin, L"View");
-                if (editView) { pptCallInt(editView, L"GotoSlide", n); editView->Release(); }
-                activeWin->Release();
-            }
+            IDispatch *deck = findPptForWindow(app, selectedHwnd(), selectedTitle());
+            IDispatch *editView = pptEditView(app, deck);
+            if (editView) { pptCallInt(editView, L"GotoSlide", n); editView->Release(); }
+            if (deck) deck->Release();
             app->Release();
         }
     }
@@ -940,13 +1183,22 @@ void PptTab::onPollTimer()
     bool doAutoScan = (++m_pollCount >= 10);
     if (doAutoScan) {
         m_pollCount = 0;
-        // Every 5 s: auto-detect windows if no selection
-        if (m_winCombo->currentIndex() <= 0)
+        // Every 5 s: auto-detect windows if no selection and no item is bound
+        // (a bound item decides its own window; never auto-pick over it).
+        if (!m_hasBinding && m_winCombo->currentIndex() <= 0)
             scanWindows();
+        // Bound item wants COM but PowerPoint wasn't reachable yet: retry.
+        if (m_comWanted && !m_pptConnected) connectCom();
     }
 
-    // COM polling only when PowerPoint COM connected
-    if (!m_pptConnected) return;
+    // Bound window not open yet: look again every 2.5 s and attach when it appears.
+    if (m_hasBinding && m_unresolved && m_active && (m_pollCount % 5) == 0) {
+        rebuildWindowList(false);
+        applyBinding();
+    }
+
+    // COM polling only when PowerPoint COM connected and the captured window is PowerPoint
+    if (!m_pptConnected || !selectedIsPpt()) return;
     // Skip visual-only actions when not active/visible, but still read slide position
     bool activeVisible = m_active && !m_blank;
 
@@ -957,17 +1209,16 @@ void PptTab::onPollTimer()
         IDispatch *app = getPptApp();
         if (app) {
             int cur = 0, total = 0;
-            IDispatch *activeWin = pptObj(app, L"ActiveWindow");
-            if (activeWin) {
-                IDispatch *editView = pptObj(activeWin, L"View");
-                if (editView) {
-                    IDispatch *slide = pptObj(editView, L"Slide");
-                    if (slide) { cur = pptInt(slide, L"SlideIndex"); slide->Release(); }
-                    editView->Release();
-                }
-                activeWin->Release();
+            // Read the deck that owns the captured window; only fall back to
+            // PowerPoint's active window/presentation when no deck matches.
+            IDispatch *deck = findPptForWindow(app, selectedHwnd(), selectedTitle());
+            IDispatch *editView = pptEditView(app, deck);
+            if (editView) {
+                IDispatch *slide = pptObj(editView, L"Slide");
+                if (slide) { cur = pptInt(slide, L"SlideIndex"); slide->Release(); }
+                editView->Release();
             }
-            IDispatch *activePres = pptObj(app, L"ActivePresentation");
+            IDispatch *activePres = deck ? deck : pptObj(app, L"ActivePresentation");
             if (activePres) {
                 IDispatch *slides = pptObj(activePres, L"Slides");
                 if (slides) { total = pptInt(slides, L"Count"); slides->Release(); }

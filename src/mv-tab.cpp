@@ -238,6 +238,7 @@ void MvVideoPanel::playVideoAt(int index)
     updateVideoControls();
     lyrics_renderer_mv_video_push(m_items[index].path, m_fadeDurationMs);
     emit videoStarted();
+    emit videoStartedAt(index);
 }
 
 void MvVideoPanel::onAddVideo()
@@ -1277,6 +1278,9 @@ VideoTab::VideoTab(QWidget *parent) : QWidget(parent)
 
     connect(m_videoPanel, &MvVideoPanel::videoStarted, this, [this](){
         emit playbackStarted();
+    });
+    connect(m_videoPanel, &MvVideoPanel::videoStartedAt, this, [this](int i){
+        emit mediaActivated(i);
     });
     connect(m_videoPanel, &MvVideoPanel::mediaListChanged, this, [this](const QStringList &p){
         emit mediaListChanged(p);

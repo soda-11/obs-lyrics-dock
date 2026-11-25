@@ -2,6 +2,7 @@
 #include "song-manager.hpp"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QDir>
 #include <QStandardPaths>
 #include <QJsonDocument>
@@ -126,7 +127,6 @@ QJsonObject LyricsSection::toJson() const
     o["showTranslation"] = showTranslation;
     if (!pinyin.isEmpty())         o["pinyin"]         = pinyin;
     if (!english.isEmpty())        o["english"]        = english;
-    if (!backgroundPath.isEmpty()) o["backgroundPath"] = backgroundPath;
     return o;
 }
 
@@ -141,7 +141,7 @@ LyricsSection LyricsSection::fromJson(const QJsonObject &o)
     s.showTranslation = o["showTranslation"].toBool(false);
     s.pinyin          = o["pinyin"].toString();
     s.english         = o["english"].toString();
-    s.backgroundPath  = o["backgroundPath"].toString();
+    s.legacyBackgroundPath = o["backgroundPath"].toString(); // old files only; see header
     return s;
 }
 
@@ -149,21 +149,15 @@ QList<LyricsSlide> Song::allSlides() const
 {
     QList<LyricsSlide> result;
     for (const auto &sec : sections) {
-        // Effective background: section override first, then song default
-        QString effectiveBg = sec.backgroundPath.isEmpty() ? backgroundPath : sec.backgroundPath;
         if (sec.isChinese) {
-            QList<LyricsSlide> slides = sec.chineseSlides();
-            for (auto &sl : slides)
-                sl.backgroundPath = effectiveBg;
-            result << slides;
+            result << sec.chineseSlides();
         } else {
             QString lbl = sec.label.isEmpty()
                           ? sectionTypeLabel(sec.type) : sec.label;
             for (const auto &slideText : sec.slides()) {
                 LyricsSlide sl;
-                sl.section        = lbl;
-                sl.text           = slideText;
-                sl.backgroundPath = effectiveBg;
+                sl.section = lbl;
+                sl.text    = slideText;
                 result << sl;
             }
         }
@@ -180,7 +174,6 @@ QJsonObject Song::toJson() const
     o["key"]       = key;
     o["tempo"]     = tempo;
     o["copyright"] = copyright;
-    if (!backgroundPath.isEmpty()) o["backgroundPath"] = backgroundPath;
     QJsonArray arr;
     for (const auto &s : sections) arr.append(s.toJson());
     o["sections"]  = arr;
@@ -196,7 +189,6 @@ Song Song::fromJson(const QJsonObject &o)
     s.key            = o["key"].toString();
     s.tempo          = o["tempo"].toString();
     s.copyright      = o["copyright"].toString();
-    s.backgroundPath = o["backgroundPath"].toString();
     for (const auto &v : o["sections"].toArray())
         s.sections << LyricsSection::fromJson(v.toObject());
     return s;
@@ -224,17 +216,52 @@ void SongManager::load()
     QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     f.close();
     m_songs.clear();
-    for (const auto &v : doc.array())
+    QJsonArray songs;
+    if (doc.isObject()) {                // v2+: {"version":N,"songs":[...]}
+        m_diskVersion = doc.object()["version"].toInt(2);
+        songs = doc.object()["songs"].toArray();
+    } else {                             // v1: bare array (also backgrounds in sections)
+        m_diskVersion = 1;
+        songs = doc.array();
+    }
+    for (const auto &v : songs)
         m_songs << Song::fromJson(v.toObject());
 }
 
 void SongManager::save()
 {
+    // First write after reading an old file: keep the original untouched, once.
+    if (m_diskVersion < 2) {
+        const QString bak = QFileInfo(dataPath()).absolutePath() + "/songs.v1.bak.json";
+        if (!QFile::exists(bak)) QFile::copy(dataPath(), bak);
+    }
     QJsonArray arr;
     for (const auto &s : m_songs) arr.append(s.toJson());
+    QJsonObject root;
+    root["version"] = 2;
+    root["songs"]   = arr;
     QFile f(dataPath());
     if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QJsonDocument(arr).toJson());
+    f.write(QJsonDocument(root).toJson());
+    f.close();
+    m_diskVersion = 2;
+    // The file no longer carries backgrounds; drop the in-memory leftovers too so a song
+    // added to a segment right after the upgrade starts with a blank background.
+    for (auto &s : m_songs)
+        for (auto &sec : s.sections) sec.legacyBackgroundPath.clear();
+}
+
+void SongManager::ensureCurrent()
+{
+    if (m_diskVersion < 2) save();
+}
+
+void SongManager::upsertSong(const Song &s)
+{
+    for (auto &existing : m_songs)
+        if (existing.id == s.id) { existing = s; save(); return; }
+    m_songs << s;
+    save();
 }
 
 Song *SongManager::findById(const QString &id)

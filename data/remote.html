@@ -368,12 +368,12 @@ body{
   justify-content:center;flex:1;padding:24px;text-align:center;
   background:#000;position:relative;}
 #confPanel.conf-light{background:#fff;}
-#confLyrics{font-size:clamp(26px,6vw,52px);font-weight:700;
+#confLyrics{font-size:calc(clamp(26px,6vw,52px) * var(--conf-scale,1));font-weight:700;
   color:#fff;line-height:1.35;white-space:pre-wrap;margin-bottom:20px;}
 #confPanel.conf-light #confLyrics{color:#111;}
-#confTitle{font-size:15px;color:var(--text2);}
+#confTitle{font-size:calc(15px * var(--conf-scale,1));color:var(--text2);}
 #confPanel.conf-light #confTitle{color:#555;}
-#confSection{font-size:13px;color:var(--accent);margin-top:3px;}
+#confSection{font-size:calc(13px * var(--conf-scale,1));color:var(--accent);margin-top:3px;}
 #confPanel.conf-light #confSection{color:#0066cc;}
 #confEmpty{font-size:18px;color:#333;margin-top:40px;}
 #confPanel.conf-light #confEmpty{color:#aaa;}
@@ -381,6 +381,13 @@ body{
   background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);
   color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;}
 #confPanel.conf-light #confThemeBtn{background:rgba(0,0,0,0.07);
+  border-color:rgba(0,0,0,0.2);color:#333;}
+/* text size buttons (top-left, opposite the theme button) */
+#confSizeBtns{position:absolute;top:12px;left:12px;display:flex;gap:6px;}
+#confSizeBtns button{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);
+  color:#fff;border-radius:20px;padding:5px 14px;font-size:15px;font-weight:700;cursor:pointer;
+  min-width:46px;}
+#confPanel.conf-light #confSizeBtns button{background:rgba(0,0,0,0.07);
   border-color:rgba(0,0,0,0.2);color:#333;}
 
 /* ── Viewer: score ────────────────────────────────────────── */
@@ -438,7 +445,7 @@ body{
 }
 #lpSection1{
   flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;
-  display:flex;align-items:center;gap:6px;
+  display:flex;align-items:stretch;gap:6px;
   padding:6px 8px;-webkit-overflow-scrolling:touch;
   scrollbar-width:none;
 }
@@ -448,16 +455,16 @@ body{
 .lpSvcChip{
   flex-shrink:0;padding:7px 10px;border-radius:8px;
   border:1.5px solid var(--border);background:var(--bg2);
-  cursor:pointer;display:flex;flex-direction:column;align-items:center;
-  gap:2px;min-width:72px;max-width:130px;
+  cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;min-width:108px;max-width:195px;
   user-select:none;-webkit-user-select:none;
 }
 .lpSvcChip:active{opacity:0.75;}
-.lpSvcChip.active{border-color:var(--accent);background:#0a1f35;}
-.lpSvcChipType{font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#555;}
+.lpSvcChip.active{border-color:var(--accent);background:#0e3a66;box-shadow:0 0 0 2px var(--accent);}
+.lpSvcChipType{font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#555;}
 .lpSvcChip.active .lpSvcChipType{color:var(--accent);}
 .lpSvcChipTitle{
-  font-size:11px;font-weight:600;color:#ccc;
+  font-size:16.5px;font-weight:600;color:#ccc;
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
   width:100%;text-align:center;
 }
@@ -708,6 +715,10 @@ body{
   <!-- Confidence monitor (viewer) -->
   <div id="confPanel">
     <button id="confThemeBtn" onclick="toggleConfTheme()">☀ Light</button>
+    <div id="confSizeBtns">
+      <button onclick="confSize(-0.15)" title="Smaller text">A−</button>
+      <button onclick="confSize(0.15)" title="Larger text">A+</button>
+    </div>
     <div id="confLyrics"></div>
     <div><div id="confTitle"></div><div id="confSection"></div></div>
     <div id="confEmpty">Waiting for lyrics...</div>
@@ -778,6 +789,9 @@ var serviceOrderData=[];
 var liveMode=false;
 var localActiveSvc=-1;      // service item idx whose non-lyrics slide is active
 var localActiveSvcSlide=-1; // local slide idx within that item
+// What the PLUGIN says is on air right now (message 'onAir').  The Live Preview follows this:
+// it highlights the on-air segment and slide, and its arrows ask the plugin for next / previous.
+var onAirSegIdx=-1, onAirSegId='', onAirSlideIdx=-1, onAirKind='';
 
 // ── Section color palettes (mirrors C++ kVerseColors etc.) ────
 var kVC=["#F3F5E5","#DDE8A1","#CFE35F","#B3CF17","#86EA57"];
@@ -1014,6 +1028,8 @@ function handleMsg(msg){
       break;
     case 'serviceOrder':
       serviceOrderData=msg.items||[];
+      // The queue changed: find the on-air segment again by its id (positions may have moved).
+      if(onAirSegId) onAirSegIdx=lpResolveOnAirIdx(onAirSegIdx);
       renderServiceList();
       renderLPServiceOrder();
       // Re-render col2 if a non-lyrics service item is currently shown there,
@@ -1024,6 +1040,12 @@ function handleMsg(msg){
       } else if(liveMode){
         renderLiveModeSlides();
       }
+      break;
+    case 'onAir':
+      onAirSegId=msg.segId||''; onAirKind=msg.kind||'';
+      onAirSlideIdx=(msg.slideIdx===undefined?-1:msg.slideIdx);
+      onAirSegIdx=lpResolveOnAirIdx(msg.segIdx===undefined?-1:msg.segIdx);
+      lpApplyOnAir();
       break;
     case 'scenes':
       sceneList=msg.scenes||[]; currentScene=msg.currentScene; renderScenesRow(); break;
@@ -1175,6 +1197,20 @@ function toggleConfTheme(){
   btn.textContent=light?'🌙 Dark':'☀ Light';
 }
 
+// Text size of the confidence monitor: a factor applied to the lyrics, title and section text.
+// Remembered on this device.
+var confScale=1;
+try{ var _cs=parseFloat(localStorage.getItem('confScale')); if(_cs>=0.5&&_cs<=3) confScale=_cs; }catch(e){}
+function applyConfScale(){
+  document.getElementById('confPanel').style.setProperty('--conf-scale',confScale);
+}
+function confSize(delta){
+  confScale=Math.max(0.5,Math.min(3,Math.round((confScale+delta)*100)/100));
+  applyConfScale();
+  try{ localStorage.setItem('confScale',String(confScale)); }catch(e){}
+}
+applyConfScale();
+
 function updateConf(idx,lyrics,section,title){
   var ly=lyrics||'',sec=section||'',ttl=title||'';
   var empty=!ly&&!sec&&!ttl;
@@ -1240,11 +1276,9 @@ function selectServiceItem(si){
     }
     renderServiceList();
     renderServiceItemSlides(item);
-    // Apply first configured background when switching to a paragraphs item
-    if(item.type==='paragraphs'&&item.slideBgs){
-      var bg=item.slideBgs['0']||item.slideBgs[0];
-      if(bg) send({type:'pushMedia',path:bg,fadeMs:500});
-    }
+    // Selecting a segment does not change what is on air (no background push here): a slide
+    // card goes on air only through activateSlide(), and the PLUGIN applies its own saved
+    // background / font colour / layout.
     if(window.innerWidth<700) showMobileCol('col2');
   }
 }
@@ -1297,22 +1331,6 @@ function renderServiceItemSlides(item){
   } else {
     el.innerHTML='<div class="emptyState">'+esc(item.title)+'</div>';
   }
-}
-
-function pushParagraphSlide(serviceIdx,slideIdx){
-  var item=serviceOrderData[serviceIdx];
-  if(!item||item.type!=='paragraphs') return;
-  var slides=parseParagraphSlides(item.text||'');
-  var text=slides[slideIdx]||'';
-  send({type:'applyScripture',title:item.title,text:text});
-  // Apply slide-specific background if configured
-  if(item.slideBgs){
-    var bg=item.slideBgs[String(slideIdx)]||item.slideBgs[slideIdx];
-    if(bg) send({type:'pushMedia',path:bg,fadeMs:500});
-  }
-  document.querySelectorAll('.sCard').forEach(function(el){
-    el.classList.toggle('active',parseInt(el.dataset.idx)===slideIdx);
-  });
 }
 
 function pushMediaBackground(path){
@@ -1513,16 +1531,9 @@ function findServiceIdxForSong(songIdx){
 // New index-driven command: OBS looks up all content from its own service.json.
 // highlightLocal=true immediately marks the clicked sCard active (for non-lyrics items).
 function activateSlide(serviceIdx,slideIdx,highlightLocal){
-  // If activating a media slide with a video, stop audio bin first (mirrors plugin logic)
-  var svcItem=serviceOrderData[serviceIdx];
-  if(svcItem&&svcItem.type==='media'&&svcItem.mediaPaths){
-    var mp=svcItem.mediaPaths[slideIdx]||'';
-    if(kVidExtRe.test(mp)){
-      send({type:'audioBinStop'});
-      audioBinActive=-1; audioBinPlaying=false;
-      renderAudioBin();
-    }
-  }
+  // Putting a card on air is ONE request.  Everything else (background, font colour, layout,
+  // audio) is decided by the plugin from the segment's saved settings; the Audio Bin and
+  // video are independent, so activating a video does not stop the Audio Bin.
   send({type:'activateSlide',serviceIdx:serviceIdx,slideIdx:slideIdx});
   localActiveSvc=serviceIdx;
   localActiveSvcSlide=slideIdx;
@@ -1877,15 +1888,15 @@ function lpNavPrev(){
     activateSlide(si,prevCount-1,source[si].type!=='lyrics');
   }
 }
+// The plugin keeps the queue and knows what is on air, so IT decides what comes next / previous
+// (a presentation on air keeps the arrows for itself and never moves on to the next segment).
 function lpDoNext(){
   lpNavFlash(document.getElementById('lpNextBtn'));
-  if(lpCurrentMode==='ppt') send({type:'lpNext',mode:'ppt'});
-  else lpNavNext();
+  send({type:'lpNext',mode:(lpCurrentMode==='ppt'?'ppt':'queue')});
 }
 function lpDoPrev(){
   lpNavFlash(document.getElementById('lpPrevBtn'));
-  if(lpCurrentMode==='ppt') send({type:'lpPrev',mode:'ppt'});
-  else lpNavPrev();
+  send({type:'lpPrev',mode:(lpCurrentMode==='ppt'?'ppt':'queue')});
 }
 function lpSelectPres(type){
   var newType = (type === lpActivePres) ? -1 : type;
@@ -2190,6 +2201,41 @@ function chooseLivePreview(){
 }
 
 // ── LP service order (bottom panel Section 1) ─────────────────
+// The chip that is highlighted is kept in view around the middle of #lpSection1.  It only moves
+// when the highlighted chip CHANGES, so the operator can still scroll the strip by hand.
+var lpLastCentered=-2;
+function lpCenterActiveChip(){
+  var box=document.getElementById('lpSection1');
+  var chip=box&&box.querySelector('.lpSvcChip.active');
+  if(!box||!chip) return;
+  var cr=chip.getBoundingClientRect(), br=box.getBoundingClientRect();
+  if(!br.width) return;                       // panel not visible yet
+  box.scrollBy({left:(cr.left+cr.width/2)-(br.left+br.width/2),behavior:'smooth'});
+}
+
+// Index of the on-air segment in serviceOrderData, found by its id (falls back to the index sent).
+function lpResolveOnAirIdx(fallbackIdx){
+  if(onAirSegId){
+    for(var i=0;i<serviceOrderData.length;i++)
+      if(serviceOrderData[i].id===onAirSegId) return i;
+  }
+  return fallbackIdx;
+}
+function lpApplyOnAir(){
+  if(onAirSegIdx>=0){
+    lpCurrentMode=(onAirKind==='presentation')?'ppt':'lyr';
+    if(onAirKind==='paragraphs'||onAirKind==='media'){
+      localActiveSvc=onAirSegIdx; localActiveSvcSlide=onAirSlideIdx;
+      document.querySelectorAll('.sCard').forEach(function(el){
+        if(el.dataset.svc!==undefined)
+          el.classList.toggle('active',
+            parseInt(el.dataset.svc)===localActiveSvc&&parseInt(el.dataset.idx)===localActiveSvcSlide);
+      });
+    }
+  }
+  renderLPServiceOrder();
+}
+
 function renderLPServiceOrder(){
   var el=document.getElementById('lpSvcOrder');
   if(!el) return;
@@ -2202,15 +2248,28 @@ function renderLPServiceOrder(){
   var typeColors={lyrics:'#4da6ff',paragraphs:'#ffd966',media:'#44ff88',presentation:'#cc66cc'};
   el.innerHTML=source.map(function(item,si){
     var isLyrics=item.type==='lyrics';
-    var active=isLyrics
-      ?(item.songIdx===currentSongIdx&&currentServiceIdx<0)
-      :(si===currentServiceIdx);
+    // The plugin's on-air message decides which segment is highlighted.
+    var active=(onAirSegIdx>=0)
+      ?(si===onAirSegIdx)
+      :(isLyrics
+        ?(item.songIdx===currentSongIdx&&currentServiceIdx<0)
+        :(si===currentServiceIdx));
+    var pos='';
+    if(active&&onAirSegIdx>=0&&item.cards&&item.cards.length&&onAirSlideIdx>=0)
+      pos=' · '+(onAirSlideIdx+1)+'/'+item.cards.length;   // slide on air / slides in the segment
     var tc=typeColors[item.type]||'#888';
     return '<div class="lpSvcChip'+(active?' active':'')+'" onclick="lpSelectService('+si+')">'
-      +'<span class="lpSvcChipType" style="color:'+tc+'">'+(si+1)+' · '+esc(item.type)+'</span>'
+      +'<span class="lpSvcChipType" style="color:'+tc+'">'+(si+1)+' · '+esc(item.type)+pos+'</span>'
       +'<span class="lpSvcChipTitle">'+esc(item.title||'Untitled')+'</span>'
       +'</div>';
   }).join('');
+  // Which chip is highlighted now?  If it changed, bring it to the middle of the strip.
+  var act=el.querySelector('.lpSvcChip.active'), actIdx=-1;
+  if(act){ for(var k=0;k<el.children.length;k++){ if(el.children[k]===act){ actIdx=k; break; } } }
+  if(actIdx!==lpLastCentered){
+    lpLastCentered=actIdx;
+    if(actIdx>=0) requestAnimationFrame(lpCenterActiveChip);
+  }
 }
 
 function lpSelectService(si){

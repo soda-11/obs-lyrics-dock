@@ -37,6 +37,9 @@
 #include <QRegularExpression>
 #include <QFileDialog>
 #include <QUuid>
+#include <QCryptographicHash>
+#include <QApplication>
+#include <vector>
 #include <QScrollArea>
 #include <QDialogButtonBox>
 #include <QFileInfo>
@@ -48,12 +51,12 @@ static bool isVideoFile(const QString &path) {
     return v.contains(QFileInfo(path).suffix().toLower());
 }
 
-// ── MediaSlideCard — used in live mode for Media service items ─
+// ── MediaSlideCard — used in live mode for Media segments ─
 class MediaSlideCard : public QFrame {
     Q_OBJECT
 public:
-    MediaSlideCard(const QString &path, int svcIdx, int fileIdx, QWidget *parent = nullptr)
-        : QFrame(parent), m_svcIdx(svcIdx), m_fileIdx(fileIdx), m_path(path)
+    MediaSlideCard(const QString &path, int segIdx, int fileIdx, QWidget *parent = nullptr)
+        : QFrame(parent), m_segIdx(segIdx), m_fileIdx(fileIdx), m_path(path)
         , m_isPicture(!isVideoFile(path))
     {
         setFrameShape(QFrame::StyledPanel);
@@ -125,8 +128,8 @@ public:
             btnRow->addWidget(m_playBtn, 1);
             L->addLayout(btnRow);
 
-            connect(m_rewindBtn, &QPushButton::clicked, this, [this](){ emit rewindClicked(m_svcIdx, m_fileIdx); });
-            connect(m_playBtn,   &QPushButton::clicked, this, [this](){ emit playPauseClicked(m_svcIdx, m_fileIdx); });
+            connect(m_rewindBtn, &QPushButton::clicked, this, [this](){ emit rewindClicked(m_segIdx, m_fileIdx); });
+            connect(m_playBtn,   &QPushButton::clicked, this, [this](){ emit playPauseClicked(m_segIdx, m_fileIdx); });
         }
     }
 
@@ -142,18 +145,18 @@ public:
             m_playBtn->setText(QString::fromUtf8("▶  Play"));
     }
 
-    int svcIdx()  const { return m_svcIdx; }
+    int segIdx()  const { return m_segIdx; }
     int fileIdx() const { return m_fileIdx; }
     const QString &path() const { return m_path; }
 
 signals:
-    void clicked(int svcIdx, int fileIdx);
-    void playPauseClicked(int svcIdx, int fileIdx);
-    void rewindClicked(int svcIdx, int fileIdx);
+    void clicked(int segIdx, int fileIdx);
+    void playPauseClicked(int segIdx, int fileIdx);
+    void rewindClicked(int segIdx, int fileIdx);
 
 protected:
     void mousePressEvent(QMouseEvent *e) override {
-        if (e->button() == Qt::LeftButton) emit clicked(m_svcIdx, m_fileIdx);
+        if (e->button() == Qt::LeftButton) emit clicked(m_segIdx, m_fileIdx);
         QFrame::mousePressEvent(e);
     }
     void resizeEvent(QResizeEvent *e) override {
@@ -172,7 +175,7 @@ private:
             : "MediaSlideCard{background:#242424;border:1px solid #444;border-radius:6px;}"
               "MediaSlideCard:hover{border-color:#888;background:#2e2e2e;}");
     }
-    int     m_svcIdx, m_fileIdx;
+    int     m_segIdx, m_fileIdx;
     QString m_path;
     bool    m_isPicture  = false;
     QPixmap m_srcPixmap;               // original full-res thumb for picture rescaling
@@ -182,12 +185,12 @@ private:
     QPushButton *m_playBtn   = nullptr;
 };
 
-// ── PptLiveCard — used in live mode for Presentation service items ─
+// ── PptLiveCard — used in live mode for Presentation segments ─
 class PptLiveCard : public QFrame {
     Q_OBJECT
 public:
-    PptLiveCard(const QString &title, int svcIdx, QWidget *parent = nullptr)
-        : QFrame(parent), m_svcIdx(svcIdx)
+    PptLiveCard(const QString &title, int segIdx, QWidget *parent = nullptr)
+        : QFrame(parent), m_segIdx(segIdx)
     {
         setCursor(Qt::PointingHandCursor);
         setFrameShape(QFrame::StyledPanel);
@@ -232,8 +235,8 @@ public:
         L->addWidget(m_statusLbl);
         L->addLayout(btnRow);
 
-        connect(m_prevBtn, &QPushButton::clicked, this, [this](){ emit prevRequested(m_svcIdx); });
-        connect(m_nextBtn, &QPushButton::clicked, this, [this](){ emit nextRequested(m_svcIdx); });
+        connect(m_prevBtn, &QPushButton::clicked, this, [this](){ emit prevRequested(m_segIdx); });
+        connect(m_nextBtn, &QPushButton::clicked, this, [this](){ emit nextRequested(m_segIdx); });
     }
 
     void setActive(bool active) {
@@ -244,16 +247,16 @@ public:
             : "color:#888;font-size:9px;");
     }
 
-    int svcIdx() const { return m_svcIdx; }
+    int segIdx() const { return m_segIdx; }
 
 signals:
-    void activateRequested(int svcIdx);
-    void prevRequested(int svcIdx);
-    void nextRequested(int svcIdx);
+    void activateRequested(int segIdx);
+    void prevRequested(int segIdx);
+    void nextRequested(int segIdx);
 
 protected:
     void mousePressEvent(QMouseEvent *e) override {
-        if (e->button() == Qt::LeftButton) emit activateRequested(m_svcIdx);
+        if (e->button() == Qt::LeftButton) emit activateRequested(m_segIdx);
         QFrame::mousePressEvent(e);
     }
 
@@ -264,7 +267,7 @@ private:
             : "PptLiveCard{background:#242424;border:1px solid #444;border-radius:6px;}"
               "PptLiveCard:hover{border-color:#c084fc;background:#2e2e2e;}");
     }
-    int m_svcIdx;
+    int m_segIdx;
     QLabel      *m_statusLbl = nullptr;
     QPushButton *m_prevBtn = nullptr, *m_nextBtn = nullptr;
 };
@@ -573,8 +576,8 @@ void SongLibraryPopup::onDeleteSong()
         this,
         "Delete Song from Library",
         QString("Permanently delete \"%1\" from the song library?\n\n"
-                "This cannot be undone. The song will also be removed "
-                "from the show sequence if present.").arg(song->title),
+                "This cannot be undone. Segments already in the service keep "
+                "their own copy of the lyrics.").arg(song->title),
         QMessageBox::Yes | QMessageBox::Cancel,
         QMessageBox::Cancel);
     if (btn != QMessageBox::Yes) return;
@@ -883,13 +886,13 @@ void SlideButton::setBackgroundThumb(const QString &path)
 void SlideButton::contextMenuEvent(QContextMenuEvent *e)
 {
     QMenu menu(this);
-    auto *editAct    = menu.addAction(makePenIcon(), "Edit this section...");
+    auto *editAct    = menu.addAction(makePenIcon(), "Edit...");
     menu.addSeparator();
-    auto *bgCardAct  = menu.addAction(QString::fromUtf8("🖼  Apply current background for this card"));
-    auto *bgSecAct   = menu.addAction(QString::fromUtf8("🖼  Apply current background for this section"));
+    auto *bgCardAct  = menu.addAction(QString::fromUtf8("🖼  Apply current background to this slide card"));
+    auto *bgSecAct   = menu.addAction(QString::fromUtf8("🖼  Apply current background to this segment (default)"));
     menu.addSeparator();
-    auto *clrCardAct = menu.addAction(QString::fromUtf8("✕  Clear background for this card"));
-    auto *clrSecAct  = menu.addAction(QString::fromUtf8("✕  Clear background for this section"));
+    auto *clrCardAct = menu.addAction(QString::fromUtf8("✕  Clear this slide card's own background"));
+    auto *clrSecAct  = menu.addAction(QString::fromUtf8("✕  Clear this segment's default background"));
     clrCardAct->setEnabled(!m_bgPath.isEmpty());
 
     QAction *chosen = menu.exec(e->globalPos());
@@ -957,23 +960,156 @@ LyricsDock::LyricsDock(QWidget *parent) : QWidget(parent)
 
 // ── Sequence JSON builder ─────────────────────────────────────
 // Builds the sequence as JSON matching the slide tile order in the UI.
-// Build a Song from a Lyrics ServiceItem using embedded sections.
+// Build a Song from a Lyrics Segment using embedded sections.
 // Falls back to the library lookup if no sections are embedded yet
 // (backward compatibility for service.json files saved before this change).
-static Song songFromItem(const ServiceItem &item)
+// ── Slide cards: identity that survives edits ────────────────
+// A segment's slide TEXT is derived from its sections / text.  Each slide has a SlideCard in
+// Segment::cards that holds what must not change when the text changes: a permanent id and
+// the card's own background.  syncCards() re-aligns the cards with the current text and keeps
+// the id (and background) of every card that still exists.
+
+static QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+
+// Content fingerprint of one slide card (stable across runs).
+static QString cardKey(const QString &section, const QString &text, const QString &pinyin,
+                       const QString &english, bool chinese)
+{
+    const QChar sep(0x1f);
+    const QString s = section + sep + text + sep + pinyin + sep + english + sep
+                    + QString(chinese ? "1" : "0");
+    return QString::fromLatin1(
+        QCryptographicHash::hash(s.toUtf8(), QCryptographicHash::Md5).toHex());
+}
+
+// Fingerprints of the slides a segment currently produces, in on-air order.
+static QStringList cardKeysFor(const Segment &seg)
+{
+    QStringList keys;
+    if (seg.type == Segment::Type::Lyrics) {
+        Song s;
+        s.sections = seg.sections;
+        for (const auto &sl : s.allSlides())
+            keys << cardKey(sl.section, sl.text, sl.pinyin, sl.english, sl.isChinese);
+    } else if (seg.type == Segment::Type::Paragraphs) {
+        for (const QString &t : seg.parseSlides())
+            keys << cardKey(QString(), t, QString(), QString(), false);
+    } else if (seg.type == Segment::Type::Media) {
+        // One card per file; the file path is its fingerprint.
+        for (const QString &p : seg.mediaPaths)
+            keys << cardKey(p, QString(), QString(), QString(), false);
+    }
+    return keys;
+}
+
+// Align the stored cards (old) with the slides the text now produces (keys).
+//  1. Cards whose content is unchanged are matched by a longest-common-subsequence over the
+//     fingerprints, so inserting or deleting a slide does not disturb the others.
+//  2. Between two matched cards, leftover old and new cards are paired in order: an EDITED
+//     card keeps its id and background.
+//  3. Surplus new slides get fresh ids; surplus old cards are dropped.
+static QList<SlideCard> reconcileCards(const QList<SlideCard> &old, const QStringList &keys)
+{
+    const int n = old.size(), m = keys.size();
+    std::vector<int> dp((size_t)(n + 1) * (size_t)(m + 1), 0);
+    auto at = [&](int i, int j) -> int & { return dp[(size_t)i * (size_t)(m + 1) + (size_t)j]; };
+    for (int i = n - 1; i >= 0; --i)
+        for (int j = m - 1; j >= 0; --j)
+            at(i, j) = (old[i].key == keys[j]) ? at(i + 1, j + 1) + 1
+                                               : qMax(at(i + 1, j), at(i, j + 1));
+
+    QList<QPair<int,int>> matches;
+    for (int i = 0, j = 0; i < n && j < m; ) {
+        if (old[i].key == keys[j])             { matches << qMakePair(i, j); ++i; ++j; }
+        else if (at(i + 1, j) >= at(i, j + 1)) ++i;
+        else                                   ++j;
+    }
+    matches << qMakePair(n, m);   // sentinel closes the last gap
+
+    QList<SlideCard> out;
+    int pi = 0, pj = 0;
+    for (const auto &mt : matches) {
+        const int gapOld = mt.first - pi, gapNew = mt.second - pj;
+        for (int k = 0; k < gapNew; ++k) {
+            SlideCard c;
+            if (k < gapOld) c = old[pi + k];   // edited card keeps id + background
+            else            c.id = newId();    // genuinely new slide
+            c.key = keys[pj + k];
+            out << c;
+        }
+        if (mt.second < m) {                   // the matched (unchanged) card itself
+            SlideCard c = old[mt.first];
+            c.key = keys[mt.second];
+            out << c;
+        }
+        pi = mt.first + 1;
+        pj = mt.second + 1;
+    }
+    return out;
+}
+
+void Segment::syncCards()
+{
+    if (type != Type::Lyrics && type != Type::Paragraphs && type != Type::Media) {
+        cards.clear();   // Presentation has no slide cards
+        return;
+    }
+    const QStringList keys = cardKeysFor(*this);
+    // Nothing to align yet (e.g. the sections are filled in from the library afterwards):
+    // leave stored cards and legacy backgrounds untouched for the next sync.
+    if (keys.isEmpty() && cards.isEmpty()) return;
+    cards = reconcileCards(cards, keys);
+
+    // Backgrounds stored by slide index in files from before slide-card ids ...
+    for (auto it = legacySlideBgs.constBegin(); it != legacySlideBgs.constEnd(); ++it)
+        if (it.key() >= 0 && it.key() < cards.size() && cards[it.key()].background.isEmpty())
+            cards[it.key()].background = it.value();
+    legacySlideBgs.clear();
+    // ... and section-level backgrounds from before v12.27.0.
+    int idx = 0;
+    for (auto &sec : sections) {
+        const int n = sec.isChinese ? sec.chineseSlides().size() : sec.slides().size();
+        if (!sec.legacyBackgroundPath.isEmpty())
+            for (int i = 0; i < n && idx + i < cards.size(); ++i)
+                if (cards[idx + i].background.isEmpty())
+                    cards[idx + i].background = sec.legacyBackgroundPath;
+        sec.legacyBackgroundPath.clear();
+        idx += n;
+    }
+}
+
+void Segment::remintIds()
+{
+    id = newId();
+    for (auto &c : cards) c.id = newId();
+}
+
+// The library song a segment came from (falls back to the segment id for a segment that
+// was never linked to the library).  This is the id the song edit dialog works with.
+static QString songIdOf(const Segment &seg)
+{
+    return seg.sourceSongId.isEmpty() ? seg.id : seg.sourceSongId;
+}
+
+// Build a Song from a Lyrics Segment using its embedded sections.
+// Falls back to the library only when no sections are embedded (very old service files).
+static Song songFromItem(const Segment &item)
 {
     if (!item.sections.isEmpty()) {
         Song s;
-        s.id      = item.id;
-        s.title   = item.title;
-        s.artist  = item.artist;
-        s.sections = item.sections;
+        s.id        = songIdOf(item);
+        s.title     = item.title;
+        s.artist    = item.artist;
+        s.key       = item.songKey;
+        s.tempo     = item.songTempo;
+        s.copyright = item.songCopyright;
+        s.sections  = item.sections;
         return s;
     }
     // Fallback: look up from library
-    const Song *lib = SongManager::instance().findById(item.id);
+    const Song *lib = SongManager::instance().findById(songIdOf(item));
     if (lib) return *lib;
-    Song empty; empty.id = item.id; empty.title = item.title; empty.artist = item.artist;
+    Song empty; empty.id = songIdOf(item); empty.title = item.title; empty.artist = item.artist;
     return empty;
 }
 
@@ -983,12 +1119,12 @@ QJsonArray LyricsDock::buildSequenceJson() const
     QJsonArray songs;
     int globalIdx = 0; // globally unique across ALL songs in sequence
     for (const auto &id : m_sequenceSongIds) {
-        // Find the corresponding service item to use embedded sections
-        const ServiceItem *svcItem = nullptr;
-        for (const auto &si : m_serviceItems)
-            if (si.type == ServiceItem::Type::Lyrics && si.id == id) { svcItem = &si; break; }
-        if (!svcItem) continue;
-        Song song = songFromItem(*svcItem);
+        // Find the corresponding segment to use embedded sections
+        const Segment *seg = nullptr;
+        for (const auto &si : m_segments)
+            if (si.type == Segment::Type::Lyrics && si.id == id) { seg = &si; break; }
+        if (!seg) continue;
+        Song song = songFromItem(*seg);
         if (song.allSlides().isEmpty()) continue;
         QJsonObject s;
         s["id"]     = song.id;
@@ -1036,6 +1172,13 @@ void LyricsDock::audioBinStopFromRemote()
     // broadcastAudioBinState(-1,false) is called inside stopPlayback via m_wsServer
 }
 
+// On-disk service files list their segments under "segments" (v12.26.0+).
+// Older files (and older remote exports) used "items"; always read both.
+static QJsonArray segmentsArray(const QJsonObject &o)
+{
+    return o.contains("segments") ? o["segments"].toArray() : o["items"].toArray();
+}
+
 QJsonObject LyricsDock::buildFullServiceExport() const
 {
     QJsonObject root;
@@ -1070,13 +1213,13 @@ QJsonObject LyricsDock::buildFullServiceExport() const
         root["audioBin"] = aArr;
     }
 
-    // All service items (Lyrics, Paragraphs, Media — not Presentation)
+    // All segments (Lyrics, Paragraphs, Media — not Presentation)
     QJsonArray items;
-    for (const auto &item : m_serviceItems) {
-        if (item.type == ServiceItem::Type::Presentation) continue;
+    for (const auto &item : m_segments) {
+        if (item.type == Segment::Type::Presentation) continue;
         items.append(item.toJson());
     }
-    root["items"] = items;
+    root["segments"] = items;
 
     return root;
 }
@@ -1141,52 +1284,59 @@ void LyricsDock::applyFullServiceImport(const QJsonObject &root, bool replaceLay
         }
     }
 
-    // Always replace service items (Lyrics, Paragraphs, Media)
+    // Always replace segments (Lyrics, Paragraphs, Media)
     // Keep existing Presentation items as-is
-    for (int i = m_serviceItems.size() - 1; i >= 0; --i) {
-        if (m_serviceItems[i].type != ServiceItem::Type::Presentation)
-            m_serviceItems.removeAt(i);
+    for (int i = m_segments.size() - 1; i >= 0; --i) {
+        if (m_segments[i].type != Segment::Type::Presentation)
+            m_segments.removeAt(i);
     }
 
     int insertAt = 0;
     m_sequenceSongIds.clear();
-    for (const auto &v : root["items"].toArray()) {
+    for (const auto &v : segmentsArray(root)) {
         if (!v.isObject()) continue;
-        ServiceItem si = ServiceItem::fromJson(v.toObject());
-        if (si.type == ServiceItem::Type::Presentation) continue;
+        Segment si = Segment::fromJson(v.toObject());
+        if (si.type == Segment::Type::Presentation) continue;
+
+        // Library fallback for Lyrics items with no embedded sections
+        if (si.type == Segment::Type::Lyrics && si.sections.isEmpty()) {
+            const Song *lib = SongManager::instance().findById(si.sourceSongId);
+            if (lib) {
+                si.sections = lib->sections;
+                si.songKey = lib->key; si.songTempo = lib->tempo; si.songCopyright = lib->copyright;
+                si.syncCards();
+            }
+        }
 
         if (version == 1) {
             // v1 format: strip backgrounds (weren't saved correctly)
-            si.slideBgs.clear();
-            for (auto &sec : si.sections) sec.backgroundPath.clear();
+            si.clearBackgrounds();
             si.colorPresetIdx = 0;
         }
 
-        // Library fallback for Lyrics items with no embedded sections
-        if (si.type == ServiceItem::Type::Lyrics && si.sections.isEmpty()) {
-            const Song *lib = SongManager::instance().findById(si.id);
-            if (lib) si.sections = lib->sections;
-        }
+        // An import always gets NEW segment and slide-card ids: the file's ids may already
+        // exist in this service.
+        si.remintIds();
 
-        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
-        m_serviceItems.insert(insertAt++, si);
+        if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
+        m_segments.insert(insertAt++, si);
     }
 
-    m_activeServiceIdx = -1;
+    m_activeSegIdx = -1;
     clearSlideGrid();
-    rebuildServiceList();
+    rebuildSegmentList();
     saveServiceOrder();
     if (replaceLayout) saveState();
     broadcastSequence();
 }
 
-void LyricsDock::importServiceItemsFromRemote(const QJsonArray &items)
+void LyricsDock::importSegmentsFromRemote(const QJsonArray &items)
 {
     // Remove all existing Lyrics and Paragraphs items
-    for (int i = m_serviceItems.size() - 1; i >= 0; --i) {
-        if (m_serviceItems[i].type == ServiceItem::Type::Lyrics ||
-            m_serviceItems[i].type == ServiceItem::Type::Paragraphs) {
-            m_serviceItems.removeAt(i);
+    for (int i = m_segments.size() - 1; i >= 0; --i) {
+        if (m_segments[i].type == Segment::Type::Lyrics ||
+            m_segments[i].type == Segment::Type::Paragraphs) {
+            m_segments.removeAt(i);
         }
     }
 
@@ -1194,30 +1344,35 @@ void LyricsDock::importServiceItemsFromRemote(const QJsonArray &items)
     int insertAt = 0;
     for (const auto &v : items) {
         if (!v.isObject()) continue;
-        ServiceItem si = ServiceItem::fromJson(v.toObject());
-        if (si.type != ServiceItem::Type::Lyrics &&
-            si.type != ServiceItem::Type::Paragraphs) continue;
+        Segment si = Segment::fromJson(v.toObject());
+        if (si.type != Segment::Type::Lyrics &&
+            si.type != Segment::Type::Paragraphs) continue;
+        // Library fallback for songs with no embedded sections
+        if (si.type == Segment::Type::Lyrics && si.sections.isEmpty()) {
+            const Song *lib = SongManager::instance().findById(si.sourceSongId);
+            if (lib) {
+                si.sections = lib->sections;
+                si.songKey = lib->key; si.songTempo = lib->tempo; si.songCopyright = lib->copyright;
+                si.syncCards();
+            }
+        }
         // Strip backgrounds to be safe
-        si.slideBgs.clear();
-        for (auto &sec : si.sections) sec.backgroundPath.clear();
+        si.clearBackgrounds();
         // Default color preset
         si.colorPresetIdx = 0;
-        // Library fallback for songs with no embedded sections
-        if (si.type == ServiceItem::Type::Lyrics && si.sections.isEmpty()) {
-            const Song *lib = SongManager::instance().findById(si.id);
-            if (lib) si.sections = lib->sections;
-        }
-        m_serviceItems.insert(insertAt++, si);
+        // An import always gets new segment and slide-card ids
+        si.remintIds();
+        m_segments.insert(insertAt++, si);
     }
 
     // Rebuild sequence cache
     m_sequenceSongIds.clear();
-    for (const auto &si : m_serviceItems)
-        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+    for (const auto &si : m_segments)
+        if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
 
-    m_activeServiceIdx = -1;
+    m_activeSegIdx = -1;
     clearSlideGrid();
-    rebuildServiceList();
+    rebuildSegmentList();
     saveServiceOrder();
     broadcastSequence();
 }
@@ -1226,28 +1381,33 @@ QJsonArray LyricsDock::buildServiceOrderJson() const
 {
     QJsonArray arr;
     int songIdx = 0;
-    for (int i = 0; i < m_serviceItems.size(); ++i) {
-        const auto &item = m_serviceItems[i];
+    for (int i = 0; i < m_segments.size(); ++i) {
+        const auto &item = m_segments[i];
         QJsonObject o;
         o["idx"]  = i;
         o["type"] = item.typeLabel().toLower();
-        if (item.type == ServiceItem::Type::Lyrics) {
+        o["id"]   = item.id;                     // segment id (identity in the queue)
+        {   // the segment's card queue: one id per slide card, in on-air order
+            QJsonArray cc;
+            for (const auto &c : item.cards) cc.append(c.id);
+            o["cards"] = cc;
+        }
+        if (item.type == Segment::Type::Lyrics) {
             o["title"]   = item.title;
             o["artist"]  = item.artist;
             o["songIdx"] = songIdx++;
         } else {
             o["title"]  = item.title;
             o["artist"] = QString{};
-            if (item.type == ServiceItem::Type::Paragraphs) {
+            if (item.type == Segment::Type::Paragraphs) {
                 o["text"] = item.text;
-                // Per-slide background overrides
-                if (!item.slideBgs.isEmpty()) {
-                    QJsonObject bgs;
-                    for (auto it = item.slideBgs.constBegin(); it != item.slideBgs.constEnd(); ++it)
-                        bgs[QString::number(it.key())] = it.value();
-                    o["slideBgs"] = bgs;
-                }
-            } else if (item.type == ServiceItem::Type::Media) {
+                // Per-slide background overrides (index -> path): the wire format remote.html knows
+                QJsonObject bgs;
+                for (int ci = 0; ci < item.cards.size(); ++ci)
+                    if (!item.cards[ci].background.isEmpty())
+                        bgs[QString::number(ci)] = item.cards[ci].background;
+                if (!bgs.isEmpty()) o["slideBgs"] = bgs;
+            } else if (item.type == Segment::Type::Media) {
                 QJsonArray ma;
                 for (const auto &p : item.mediaPaths) ma.append(p);
                 o["mediaPaths"] = ma;
@@ -1276,40 +1436,40 @@ void LyricsDock::pushSlideFromRemote(const QString &songTitle,
 {
     // Find the song row in the sequence by title
     for (int row = 0; row < m_sequenceSongIds.size(); ++row) {
-        const ServiceItem *si = nullptr;
-        for (const auto &s : m_serviceItems)
-            if (s.type == ServiceItem::Type::Lyrics && s.id == m_sequenceSongIds[row])
+        const Segment *si = nullptr;
+        for (const auto &s : m_segments)
+            if (s.type == Segment::Type::Lyrics && s.id == m_sequenceSongIds[row])
                 { si = &s; break; }
         if (!si || si->title != songTitle) continue;
 
         // Find the service-item index for this song (may differ from row when
         // non-Lyrics items precede it in the service order).
-        int svcIdx = -1;
-        for (int i = 0; i < m_serviceItems.size(); ++i) {
-            if (m_serviceItems[i].type == ServiceItem::Type::Lyrics
-                    && m_serviceItems[i].id == m_sequenceSongIds[row]) {
-                svcIdx = i;
+        int segIdx = -1;
+        for (int i = 0; i < m_segments.size(); ++i) {
+            if (m_segments[i].type == Segment::Type::Lyrics
+                    && m_segments[i].id == m_sequenceSongIds[row]) {
+                segIdx = i;
                 break;
             }
         }
-        if (svcIdx < 0) svcIdx = row; // fallback: songs-only service order
+        if (segIdx < 0) segIdx = row; // fallback: songs-only service order
 
         // Select the correct row in the service list and load its slides if needed.
-        if (m_serviceList && m_serviceList->currentRow() != svcIdx)
-            m_serviceList->setCurrentRow(svcIdx);
+        if (m_segmentList && m_segmentList->currentRow() != segIdx)
+            m_segmentList->setCurrentRow(segIdx);
 
         if (m_liveMode) {
-            // In live mode, loadServiceItemContent calls clearSlideGrid() which destroys
+            // In live mode, loadSegmentContent calls clearSlideGrid() which destroys
             // the live button layout. Set up song state manually instead.
-            if (m_currentSong.id != m_sequenceSongIds[row]) {
+            if (m_currentSong.id != songIdOf(*si)) {
                 Song song = songFromItem(*si);
                 m_currentSong = song;
                 m_slides      = song.allSlides();
             }
             m_currentSongSlideOffset = computeGlobalSlideOffset(row);
         } else {
-            if (m_currentSong.id != m_sequenceSongIds[row])
-                loadServiceItemContent(svcIdx);
+            if (m_currentSong.id != songIdOf(*si))
+                loadSegmentContent(segIdx);
         }
 
         // The slideIndex from the remote is GLOBAL across all songs.
@@ -1322,6 +1482,8 @@ void LyricsDock::pushSlideFromRemote(const QString &songTitle,
         applySlideBackground();
         // Restore local index (consistent with onSlideClicked live mode behaviour).
         if (m_liveMode) m_activeSlide = localIdx;
+        rememberOnAir(*si, localIdx);
+        applySegmentPreset(*si);   // the preset belongs to this segment, applied with its slide
         if (localIdx >= 0 && localIdx < m_slides.size()) {
             const LyricsSlide &sl = m_slides[localIdx];
             if (sl.isChinese)
@@ -1339,34 +1501,36 @@ void LyricsDock::pushSlideFromRemote(const QString &songTitle,
     lyrics_renderer_push(lyrics, section, songTitle);
 }
 
-// New index-driven approach: remote sends (serviceIdx, slideIdx) and
+// New index-driven approach: remote sends (segIdx, slideIdx) and
 // the plugin looks up everything from its own service.json data.
-void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
+void LyricsDock::activateSlideFromRemote(int segIdx, int slideIdx)
 {
-    if (serviceIdx < 0 || serviceIdx >= m_serviceItems.size()) return;
-    const ServiceItem &item = m_serviceItems[serviceIdx];
+    if (segIdx < 0 || segIdx >= m_segments.size()) return;
+    const Segment &item = m_segments[segIdx];
+
+    // Activating anything other than a presentation takes the screen back from a running one.
+    if (item.type != Segment::Type::Presentation && m_pptTab && m_pptTab->activeType() >= 0) {
+        m_pptTab->requestShow(-1);
+        m_activePptSegId.clear();
+    }
 
     switch (item.type) {
-    case ServiceItem::Type::Paragraphs: {
+    case Segment::Type::Paragraphs: {
         QStringList slides = item.parseSlides();
         if (slideIdx < 0 || slideIdx >= slides.size()) return;
         // Clear any previously rendered lyrics text before showing paragraph
         lyrics_renderer_clear();
-        // Push assigned background if any
-        QString bgPath = item.slideBgs.value(slideIdx);
-        if (!bgPath.isEmpty() && bgPath != m_currentBgPath) {
-            int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
-            lyrics_renderer_media_push(bgPath, fadeMs);
-            m_currentBgPath = bgPath;
-        }
+        // Card's own background, else the segment default (blank clears)
+        showBackground(item.backgroundFor(slideIdx));
+        rememberOnAir(item, slideIdx);
         // Push text through CTW renderer
-        applyAltSentenceColor(item);
+        applyParagraphStyle(item);
         lyrics_renderer_paragraph_push(item.title, slides[slideIdx]);
         if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[slideIdx]);
         if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
         break;
     }
-    case ServiceItem::Type::Lyrics: {
+    case Segment::Type::Lyrics: {
         int row = m_sequenceSongIds.indexOf(item.id);
         if (row < 0) return;
         Song song = songFromItem(item);
@@ -1380,9 +1544,10 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
         if (m_wsServer) m_wsServer->broadcastActiveMode("lyr");
         break;
     }
-    case ServiceItem::Type::Media: {
+    case Segment::Type::Media: {
         if (slideIdx < 0 || slideIdx >= item.mediaPaths.size()) return;
         const QString &path = item.mediaPaths[slideIdx];
+        rememberOnAir(item, slideIdx);
         m_currentBgPath = path;
         // audio runs independently — video starting no longer stops it
         lyrics_renderer_clear();   // wipe any lyrics from OBS source
@@ -1394,11 +1559,12 @@ void LyricsDock::activateSlideFromRemote(int serviceIdx, int slideIdx)
         }
         break;
     }
-    case ServiceItem::Type::Presentation:
-        m_activeServiceIdx = serviceIdx;
-        if (m_pptTab) m_pptTab->requestShow(0, item.windowExe);
+    case Segment::Type::Presentation:
+        m_activeSegIdx = segIdx;
+        bindPptItem(segIdx);
+        publishOnAir();
         // Highlight the presentation item in the service list
-        m_serviceList->setCurrentRow(serviceIdx);
+        m_segmentList->setCurrentRow(segIdx);
         break;
     default:
         break;
@@ -1412,10 +1578,12 @@ void LyricsDock::applyScriptureFromRemote(const QString &title, const QString &t
 
 void LyricsDock::applyParagraphsFromRemote(const QString &title, const QString &text)
 {
-    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
-        applyAltSentenceColor(m_serviceItems[m_activeServiceIdx]);
-    else
+    if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+        applyParagraphStyle(m_segments[m_activeSegIdx]);
+    else {
+        lyrics_renderer_set_paragraph_layout(QByteArray());
         lyrics_renderer_set_alt_sentence_color(false, 0, 0);
+    }
     lyrics_renderer_paragraph_push(title, text);
     if (m_wsServer) m_wsServer->broadcastCtwState(title, text);
 }
@@ -1451,10 +1619,10 @@ void LyricsDock::pushScriptureCurrent()
 
 void LyricsDock::restoreCurrentTabContent()
 {
-    if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return;
-    const auto &item = m_serviceItems[m_activeServiceIdx];
+    if (m_activeSegIdx < 0 || m_activeSegIdx >= m_segments.size()) return;
+    const auto &item = m_segments[m_activeSegIdx];
     switch (item.type) {
-    case ServiceItem::Type::Paragraphs:
+    case Segment::Type::Paragraphs:
         if (m_activeSlide >= 0) pushCurrentSlide();
         break;
     default:
@@ -1558,9 +1726,9 @@ void LyricsDock::loadState()
     if (m_audioBin) m_audioBin->loadState();
 }
 
-// ── ServiceItem ───────────────────────────────────────────────
+// ── Segment ───────────────────────────────────────────────
 
-QJsonObject ServiceItem::toJson() const
+QJsonObject Segment::toJson() const
 {
     QJsonObject o;
     switch (type) {
@@ -1570,8 +1738,14 @@ QJsonObject ServiceItem::toJson() const
     case Type::Presentation: o["type"] = "presentation"; break;
     }
     o["id"] = id; o["title"] = title; o["artist"] = artist;
+    if (!songKey.isEmpty())       o["songKey"]       = songKey;
+    if (!songTempo.isEmpty())     o["songTempo"]     = songTempo;
+    if (!songCopyright.isEmpty()) o["songCopyright"] = songCopyright;
     o["text"] = text; o["filePath"] = filePath;
-    if (!windowExe.isEmpty()) o["windowExe"] = windowExe;
+    if (!windowTitle.isEmpty()) o["windowTitle"] = windowTitle;
+    if (!windowProc.isEmpty())  o["windowProc"]  = windowProc;
+    if (!windowCls.isEmpty())   o["windowCls"]   = windowCls;
+    if (pptComMode != -1)       o["pptComMode"]  = pptComMode;
     if (!mediaPaths.isEmpty()) {
         QJsonArray mp;
         for (const auto &p : mediaPaths) mp.append(p);
@@ -1582,12 +1756,24 @@ QJsonObject ServiceItem::toJson() const
         for (const auto &s : sections) secs.append(s.toJson());
         o["sections"] = secs;
     }
-    if (!slideBgs.isEmpty()) {
-        QJsonObject bgs;
-        for (auto it = slideBgs.constBegin(); it != slideBgs.constEnd(); ++it)
-            bgs[QString::number(it.key())] = it.value();
-        o["slideBgs"] = bgs;
+    // Always written for Lyrics: its absence is how an old (pre-id) file is recognised.
+    if (type == Type::Lyrics || !sourceSongId.isEmpty())
+        o["sourceSongId"] = sourceSongId;
+    if (!cards.isEmpty()) {
+        QJsonArray ca;
+        for (const auto &c : cards) {
+            QJsonObject co;
+            co["id"]  = c.id;
+            co["key"] = c.key;
+            if (!c.background.isEmpty()) co["bg"] = c.background;
+            ca.append(co);
+        }
+        o["cards"] = ca;
     }
+    if (!defaultBackground.isEmpty())
+        o["defaultBackground"] = defaultBackground;
+    if (!paragraphLayout.isEmpty())
+        o["layout"] = paragraphLayout;
     if (colorPresetIdx >= 0)
         o["colorPresetIdx"] = colorPresetIdx;
     if (altSentenceColor)
@@ -1597,9 +1783,9 @@ QJsonObject ServiceItem::toJson() const
     return o;
 }
 
-ServiceItem ServiceItem::fromJson(const QJsonObject &obj)
+Segment Segment::fromJson(const QJsonObject &obj)
 {
-    ServiceItem item;
+    Segment item;
     const QString t = obj["type"].toString();
     // Legacy types mapped to new types
     if      (t == "paragraphs")  item.type = Type::Paragraphs;
@@ -1612,23 +1798,61 @@ ServiceItem ServiceItem::fromJson(const QJsonObject &obj)
     else                          item.type = Type::Lyrics;
     item.id = obj["id"].toString(); item.title = obj["title"].toString();
     item.artist = obj["artist"].toString(); item.text = obj["text"].toString();
+    item.songKey       = obj["songKey"].toString();
+    item.songTempo     = obj["songTempo"].toString();
+    item.songCopyright = obj["songCopyright"].toString();
     item.filePath = obj["filePath"].toString();
-    item.windowExe = obj["windowExe"].toString();
+    // "windowExe" is the pre-v12.25.0 key (held an exe name, later a window title).
+    item.windowTitle = obj.contains("windowTitle") ? obj["windowTitle"].toString()
+                                                   : obj["windowExe"].toString();
+    item.windowProc  = obj["windowProc"].toString();
+    item.windowCls   = obj["windowCls"].toString();
+    item.pptComMode  = obj["pptComMode"].toInt(-1);
     for (const auto &v : obj["mediaPaths"].toArray())
         item.mediaPaths << v.toString();
     for (const auto &v : obj["sections"].toArray())
         if (v.isObject()) item.sections << LyricsSection::fromJson(v.toObject());
+    // Slide cards: permanent ids + each card's own background.
+    for (const auto &v : obj["cards"].toArray()) {
+        const QJsonObject co = v.toObject();
+        SlideCard c;
+        c.id         = co["id"].toString();
+        c.key        = co["key"].toString();
+        c.background = co["bg"].toString();
+        if (c.id.isEmpty()) c.id = newId();
+        item.cards << c;
+    }
+    // Files from before slide-card ids kept backgrounds by slide index.
     const auto bgsObj = obj["slideBgs"].toObject();
     for (auto it = bgsObj.constBegin(); it != bgsObj.constEnd(); ++it)
-        item.slideBgs[it.key().toInt()] = it.value().toString();
+        item.legacySlideBgs[it.key().toInt()] = it.value().toString();
+    item.defaultBackground = obj["defaultBackground"].toString();
+    item.paragraphLayout    = obj["layout"].toObject();
     if (obj.contains("colorPresetIdx"))
         item.colorPresetIdx = obj["colorPresetIdx"].toInt(-1);
     item.altSentenceColor  = obj["altSentenceColor"].toBool(false);
     item.altSentencePreset = obj["altSentencePreset"].toInt(-1);
+
+    // Before this version a Lyrics segment's id WAS the library song id.  Now the segment has
+    // its own unique id and the library id is kept in sourceSongId.
+    if (item.type == Type::Lyrics) {
+        if (obj.contains("sourceSongId")) {
+            item.sourceSongId = obj["sourceSongId"].toString();
+        } else {
+            item.sourceSongId = item.id;
+            item.id           = newId();
+            item.needsSave    = true;
+        }
+    }
+    if (item.id.isEmpty()) { item.id = newId(); item.needsSave = true; }
+
+    const bool hadCards = !item.cards.isEmpty();
+    item.syncCards();
+    if (!hadCards && !item.cards.isEmpty()) item.needsSave = true;
     return item;
 }
 
-QStringList ServiceItem::parseSlides() const
+QStringList Segment::parseSlides() const
 {
     QStringList slides;
     QStringList groups = text.split(QRegularExpression(R"(\n[ \t]*\n[ \t]*\n)"), Qt::SkipEmptyParts);
@@ -1640,7 +1864,7 @@ QStringList ServiceItem::parseSlides() const
     return slides;
 }
 
-QString ServiceItem::typeLabel() const
+QString Segment::typeLabel() const
 {
     switch (type) {
     case Type::Lyrics:       return "Lyrics";
@@ -1651,7 +1875,7 @@ QString ServiceItem::typeLabel() const
     return {};
 }
 
-QString ServiceItem::typeIcon() const
+QString Segment::typeIcon() const
 {
     if (!title.isEmpty())
         return QString(title.at(0));
@@ -1665,7 +1889,7 @@ QString ServiceItem::typeIcon() const
     return {};
 }
 
-QColor ServiceItem::typeColor() const
+QColor Segment::typeColor() const
 {
     switch (type) {
     case Type::Lyrics:       return QColor("#4a9eff");
@@ -1676,18 +1900,18 @@ QColor ServiceItem::typeColor() const
     return QColor("#4a9eff");
 }
 
-// ── ServiceItemDelegate ───────────────────────────────────────
+// ── SegmentDelegate ───────────────────────────────────────
 
-ServiceItemDelegate::ServiceItemDelegate(QObject *parent)
+SegmentDelegate::SegmentDelegate(QObject *parent)
     : QStyledItemDelegate(parent) {}
 
-QSize ServiceItemDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const
+QSize SegmentDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const
 {
     int w = option.rect.width();
     return {w > 0 ? w : 200, 52};
 }
 
-void ServiceItemDelegate::paint(QPainter *p, const QStyleOptionViewItem &opt,
+void SegmentDelegate::paint(QPainter *p, const QStyleOptionViewItem &opt,
                                 const QModelIndex &idx) const
 {
     if (!p || !idx.isValid()) return;
@@ -1697,7 +1921,7 @@ void ServiceItemDelegate::paint(QPainter *p, const QStyleOptionViewItem &opt,
     const bool hov = opt.state & QStyle::State_MouseOver;
     p->fillRect(opt.rect, sel ? QColor("#3a3a45") : hov ? QColor("#2a2a32") : QColor("#16161a"));
 
-    const auto item = idx.data(Qt::UserRole).value<ServiceItem>();
+    const auto item = idx.data(Qt::UserRole).value<Segment>();
     // Left colour stripe
     p->fillRect(opt.rect.left(), opt.rect.top(), 3, opt.rect.height(), item.typeColor());
     // Icon background
@@ -1880,7 +2104,7 @@ void LyricsDock::buildUi()
         "border-radius:3px;font-size:10px;font-weight:bold;}"
         "QPushButton:hover{background:#22385a;}"
         "QPushButton:checked{background:#0d2a4a;color:#4da6ff;border:1px solid #2a70c0;}");
-    m_editBtn->setToolTip("Edit mode: select a service item to view its slides");
+    m_editBtn->setToolTip("Edit mode: select a segment to view its slides");
 
     m_liveToggleBtn = new QPushButton("LIVE");
     m_liveToggleBtn->setCheckable(true);
@@ -1891,7 +2115,7 @@ void LyricsDock::buildUi()
         "border-radius:3px;font-size:10px;font-weight:bold;}"
         "QPushButton:hover{background:#253025;}"
         "QPushButton:checked{background:#1a4a1a;color:#3dd68c;border:1px solid #2a8a2a;}");
-    m_liveToggleBtn->setToolTip("Live mode: all sections displayed in sequence");
+    m_liveToggleBtn->setToolTip("Live mode: all segments displayed in sequence");
 
     auto *modeBtnRow = new QHBoxLayout;
     modeBtnRow->setSpacing(4);
@@ -1903,31 +2127,31 @@ void LyricsDock::buildUi()
     auto *orderHdr = new QLabel("SERVICE ORDER");
     orderHdr->setStyleSheet("color:#6b6b7b;font-size:9px;font-weight:bold;letter-spacing:1px;");
     leftL->addWidget(orderHdr);
-    m_serviceList = new QListWidget(this);
-    m_serviceList->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_serviceList->setItemDelegate(new ServiceItemDelegate(m_serviceList));
-    leftL->addWidget(m_serviceList, 1);
+    m_segmentList = new QListWidget(this);
+    m_segmentList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_segmentList->setItemDelegate(new SegmentDelegate(m_segmentList));
+    leftL->addWidget(m_segmentList, 1);
 
-    auto *svcBtnRow = new QHBoxLayout;
-    svcBtnRow->setSpacing(3);
+    auto *segBtnRow = new QHBoxLayout;
+    segBtnRow->setSpacing(3);
     m_addItemBtn    = new QPushButton("+");
     m_removeItemBtn = new QPushButton(QString::fromUtf8("\u2212"));
     m_itemUpBtn     = new QPushButton(QString::fromUtf8("\u25B2"));
     m_itemDownBtn   = new QPushButton(QString::fromUtf8("\u25BC"));
     for (auto *b : {m_addItemBtn, m_removeItemBtn, m_itemUpBtn, m_itemDownBtn})
         b->setFixedSize(28, 28);
-    m_addItemBtn->setToolTip("Add service item");
+    m_addItemBtn->setToolTip("Add segment");
     m_removeItemBtn->setToolTip("Remove selected item");
     m_itemUpBtn->setToolTip("Move up");
     m_itemDownBtn->setToolTip("Move down");
     m_removeItemBtn->setEnabled(false);
     m_itemUpBtn->setEnabled(false);
     m_itemDownBtn->setEnabled(false);
-    svcBtnRow->addWidget(m_addItemBtn);
-    svcBtnRow->addWidget(m_removeItemBtn);
-    svcBtnRow->addWidget(m_itemUpBtn);
-    svcBtnRow->addWidget(m_itemDownBtn);
-    svcBtnRow->addStretch();
+    segBtnRow->addWidget(m_addItemBtn);
+    segBtnRow->addWidget(m_removeItemBtn);
+    segBtnRow->addWidget(m_itemUpBtn);
+    segBtnRow->addWidget(m_itemDownBtn);
+    segBtnRow->addStretch();
 
     // ── Global Fade row ───────────────────────────────────────────
     auto *fadeRowW = new QWidget;
@@ -1964,7 +2188,7 @@ void LyricsDock::buildUi()
     connect(stopAllBtn, &QPushButton::clicked, this, &LyricsDock::stopAllMedia);
     leftL->addWidget(stopBarW);
 
-    leftL->addLayout(svcBtnRow);
+    leftL->addLayout(segBtnRow);
 
     // ── Import / Export row ───────────────────────────────────────
     auto *importExportRowW = new QWidget;
@@ -2015,7 +2239,7 @@ void LyricsDock::buildUi()
     // Page 3: Empty placeholder
     auto *emptyPage = new QWidget;
     auto *emptyL = new QVBoxLayout(emptyPage);
-    auto *emptyLbl = new QLabel("Select a service item\nto see its content.");
+    auto *emptyLbl = new QLabel("Select a segment\nto see its content.");
     emptyLbl->setAlignment(Qt::AlignCenter);
     emptyLbl->setStyleSheet("color:#6b6b7b;font-size:13px;");
     emptyL->addStretch();
@@ -2117,14 +2341,14 @@ void LyricsDock::buildUi()
     root->addWidget(mainSplit, 1);
 
     // ── Service list connections ──────────────────────────────
-    connect(m_serviceList, &QListWidget::currentRowChanged,
-            this, &LyricsDock::onServiceItemSelected);
-    connect(m_serviceList, &QListWidget::customContextMenuRequested,
-            this, &LyricsDock::onServiceContextMenu);
-    connect(m_addItemBtn,    &QPushButton::clicked, this, &LyricsDock::onAddServiceItem);
-    connect(m_removeItemBtn, &QPushButton::clicked, this, &LyricsDock::onRemoveServiceItem);
-    connect(m_itemUpBtn,     &QPushButton::clicked, this, &LyricsDock::onServiceItemUp);
-    connect(m_itemDownBtn,   &QPushButton::clicked, this, &LyricsDock::onServiceItemDown);
+    connect(m_segmentList, &QListWidget::currentRowChanged,
+            this, &LyricsDock::onSegmentSelected);
+    connect(m_segmentList, &QListWidget::customContextMenuRequested,
+            this, &LyricsDock::onSegmentContextMenu);
+    connect(m_addItemBtn,    &QPushButton::clicked, this, &LyricsDock::onAddSegment);
+    connect(m_removeItemBtn, &QPushButton::clicked, this, &LyricsDock::onRemoveSegment);
+    connect(m_itemUpBtn,     &QPushButton::clicked, this, &LyricsDock::onSegmentUp);
+    connect(m_itemDownBtn,   &QPushButton::clicked, this, &LyricsDock::onSegmentDown);
 
     // ── Cross-panel media coordination ───────────────────────
     connect(m_sharedGallery, &MediaGallery::mediaActivated, this, [this](){
@@ -2143,15 +2367,24 @@ void LyricsDock::buildUi()
         // paragraph/lyrics slide re-pushes its assigned background correctly.
         m_currentBgPath.clear();
     });
+    // A media file started from the Media tab: record it as on air (by id) so the remote follows.
+    connect(m_videoTab, &VideoTab::mediaActivated, this, [this](int fileIdx){
+        if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()
+                && m_segments[m_activeSegIdx].type == Segment::Type::Media) {
+            m_segments[m_activeSegIdx].syncCards();
+            rememberOnAir(m_segments[m_activeSegIdx], fileIdx);
+        }
+    });
     connect(m_sharedGallery, &MediaGallery::stopAllRequested, this, [this](){
         m_videoTab->stopPlayback();
         m_currentBgPath.clear(); // gallery cleared the OBS bg; reset cache to match
     });
-    // Save mediaPaths back to the active service item whenever VideoTab's list changes
+    // Save mediaPaths back to the active segment whenever VideoTab's list changes
     connect(m_videoTab, &VideoTab::mediaListChanged, this, [this](const QStringList &paths){
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()
-                && m_serviceItems[m_activeServiceIdx].type == ServiceItem::Type::Media) {
-            m_serviceItems[m_activeServiceIdx].mediaPaths = paths;
+        if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()
+                && m_segments[m_activeSegIdx].type == Segment::Type::Media) {
+            m_segments[m_activeSegIdx].mediaPaths = paths;
+            m_segments[m_activeSegIdx].syncCards();   // every media file keeps its own card id
             saveServiceOrder();
             // Broadcast updated service order so remote refreshes media slide cards
             if (m_wsServer)
@@ -2184,13 +2417,29 @@ void LyricsDock::buildUi()
             m_currentBgPath.clear(); // Bug A: reset cache so slide bg re-pushes after returning from presentation
         }
         if (m_wsServer) m_wsServer->broadcastPresentationActive(type);
+        publishOnAir();   // a presentation showing / stopping changes what is on air
     });
-    connect(m_pptTab, &PptTab::windowExeChanged, this, [this](const QString &exe){
-        if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return;
-        ServiceItem &item = m_serviceItems[m_activeServiceIdx];
-        if (item.type != ServiceItem::Type::Presentation) return;
-        if (item.windowExe == exe) return;
-        item.windowExe = exe;
+    // Window / COM choices belong to the item the capture is bound to
+    // (m_pptBoundSegId), not to whichever row happens to be selected.
+    connect(m_pptTab, &PptTab::windowChosen, this,
+            [this](const QString &title, const QString &exe, const QString &cls){
+        int i = segmentIndexById(m_pptBoundSegId);
+        if (i < 0) return;
+        Segment &item = m_segments[i];
+        if (item.type != Segment::Type::Presentation) return;
+        if (item.windowTitle == title && item.windowProc == exe && item.windowCls == cls) return;
+        item.windowTitle = title;
+        item.windowProc  = exe;
+        item.windowCls   = cls;
+        saveServiceOrder();
+    });
+    connect(m_pptTab, &PptTab::comModeChanged, this, [this](int mode){
+        int i = segmentIndexById(m_pptBoundSegId);
+        if (i < 0) return;
+        Segment &item = m_segments[i];
+        if (item.type != Segment::Type::Presentation) return;
+        if (item.pptComMode == mode) return;
+        item.pptComMode = mode;
         saveServiceOrder();
     });
 
@@ -2264,16 +2513,15 @@ QWidget *LyricsDock::buildSongPanel()
         "QPushButton{background:#1a2a3a;color:#6aacff;"
         "border:1px solid #2a5080;border-radius:3px;font-size:12px;padding:0 2px;}"
         "QPushButton:hover{background:#22385a;}");
+    lyricsLayoutBtn->setToolTip(
+        "Paragraph segment selected: edit THIS segment's layout.\n"
+        "Lyrics: edit the lyrics layout.\n"
+        "The DEFAULT paragraph layout (copied into new paragraph segments) is edited in the "
+        "OBS source's Properties.");
     connect(lyricsLayoutBtn, &QPushButton::clicked, this, [this](){
         if (m_paragraphMode) {
-            if (!m_paragraphLayoutDialog) {
-                m_paragraphLayoutDialog = new LayoutDialog("paragraph", window());
-                connect(m_paragraphLayoutDialog, &QObject::destroyed, this,
-                        [this](){ m_paragraphLayoutDialog = nullptr; });
-            }
-            m_paragraphLayoutDialog->show();
-            m_paragraphLayoutDialog->raise();
-            m_paragraphLayoutDialog->activateWindow();
+            // A paragraph segment owns its layout: this button edits the selected segment's.
+            showSegmentLayoutDialog(m_activeSegIdx);
         } else {
             if (!m_lyricsLayoutDialog) {
                 m_lyricsLayoutDialog = new LayoutDialog("lyrics", window());
@@ -2385,8 +2633,8 @@ QWidget *LyricsDock::buildSongPanel()
         int prevActive = m_activeSlide;
         if (m_liveMode) {
             buildAllLiveSlides();
-        } else if (m_paragraphMode && m_activeServiceIdx >= 0) {
-            loadParagraphSlides(m_serviceItems[m_activeServiceIdx]);
+        } else if (m_paragraphMode && m_activeSegIdx >= 0) {
+            loadParagraphSlides(m_segments[m_activeSegIdx]);
         } else if (!m_currentSong.id.isEmpty()) {
             loadSongSlides(m_currentSong);
         }
@@ -2402,7 +2650,13 @@ QWidget *LyricsDock::buildSongPanel()
     });
     connect(m_linesPerSlideSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v){
         setGlobalLinesPerSlide(v);
+        syncAllCards();   // slide counts changed: re-align every segment's cards
+        // The rebuild below resets the highlight: find the on-air card again by id.
+        const int onAir = (!m_paragraphMode && !m_liveMode
+                           && m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+                              ? onAirIndexIn(m_segments[m_activeSegIdx]) : -1;
         if (!m_paragraphMode && !m_currentSong.id.isEmpty()) loadSongSlides(m_currentSong);
+        if (onAir >= 0 && onAir < m_slides.size()) setActiveSlide(onAir);   // highlight only
         saveState();
     });
 
@@ -2425,9 +2679,9 @@ int LyricsDock::computeGlobalSlideOffset(int forRow) const
     int offset = 0;
     for (int r = 0; r < forRow; ++r) {
         if (r >= m_sequenceSongIds.size()) break;
-        const ServiceItem *si = nullptr;
-        for (const auto &s : m_serviceItems)
-            if (s.type == ServiceItem::Type::Lyrics && s.id == m_sequenceSongIds[r])
+        const Segment *si = nullptr;
+        for (const auto &s : m_segments)
+            if (s.type == Segment::Type::Lyrics && s.id == m_sequenceSongIds[r])
                 { si = &s; break; }
         if (si) offset += songFromItem(*si).allSlides().size();
     }
@@ -2436,31 +2690,31 @@ int LyricsDock::computeGlobalSlideOffset(int forRow) const
 
 QString LyricsDock::sequenceCurrentSongId() const
 {
-    if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return {};
-    const auto &item = m_serviceItems[m_activeServiceIdx];
-    return item.type == ServiceItem::Type::Lyrics ? item.id : QString{};
+    if (m_activeSegIdx < 0 || m_activeSegIdx >= m_segments.size()) return {};
+    const auto &item = m_segments[m_activeSegIdx];
+    return item.type == Segment::Type::Lyrics ? item.id : QString{};
 }
 
-// updateServiceListItem \u2014 refresh one row in the service list widget
-void LyricsDock::updateServiceListItem(int row)
+// updateSegmentListItem \u2014 refresh one row in the service list widget
+void LyricsDock::updateSegmentListItem(int row)
 {
-    if (row < 0 || row >= m_serviceItems.size() || !m_serviceList) return;
-    auto *lwi = m_serviceList->item(row);
+    if (row < 0 || row >= m_segments.size() || !m_segmentList) return;
+    auto *lwi = m_segmentList->item(row);
     if (!lwi) return;
-    lwi->setData(Qt::UserRole, QVariant::fromValue(m_serviceItems[row]));
-    m_serviceList->update(m_serviceList->indexFromItem(lwi));
+    lwi->setData(Qt::UserRole, QVariant::fromValue(m_segments[row]));
+    m_segmentList->update(m_segmentList->indexFromItem(lwi));
 }
 
-// removeServiceItem \u2014 delete one service order row
-void LyricsDock::removeServiceItem(int row)
+// removeSegment \u2014 delete one service order row
+void LyricsDock::removeSegment(int row)
 {
-    if (row < 0 || row >= m_serviceItems.size()) return;
-    m_serviceItems.removeAt(row);
-    delete m_serviceList->takeItem(row);
+    if (row < 0 || row >= m_segments.size()) return;
+    m_segments.removeAt(row);
+    delete m_segmentList->takeItem(row);
     // Rebuild sequenceSongIds cache
     m_sequenceSongIds.clear();
-    for (const auto &si : m_serviceItems)
-        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+    for (const auto &si : m_segments)
+        if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
     clearSlideGrid();
     saveServiceOrder();
     broadcastSequence();
@@ -2510,11 +2764,10 @@ void LyricsDock::clearSlideGrid()
     m_slides.clear();
     m_slideSectionIndices.clear();
     m_activeSlide = -1;
-    m_liveMediaSvcIdx  = -1;
-    m_liveMediaFileIdx = -1;
+    clearLiveMedia();
     m_liveMediaPlaying = false;
     m_liveMediaPaused  = false;
-    m_activePptSvcIdx  = -1;
+    m_activePptSegId.clear();
     updateSlideCounter();
 }
 
@@ -2525,6 +2778,11 @@ void LyricsDock::loadSongSlides(const Song &song)
     const int cols     = m_cardWidthScale;
     const int colCardW = qMax(80, (colVpw - 8 * (cols - 1)) / cols);
     int row = 0, col = 0, globalIdx = 0;
+
+    // A card's thumb shows its own background, else the segment default.
+    const Segment *cardSeg =
+        (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+            ? &m_segments[m_activeSegIdx] : nullptr;
 
     // Pre-pass: assign Others slots to section types not matching verse/chorus/bridge.
     // Slot is assigned per unique type string, in order of first appearance.
@@ -2558,11 +2816,7 @@ void LyricsDock::loadSongSlides(const Song &song)
             }
         }
 
-        // Effective background for this section
-        QString secBg = sec.backgroundPath.isEmpty() ? song.backgroundPath : sec.backgroundPath;
-
         for (auto sl : secSlides) {
-            sl.backgroundPath     = secBg;
             m_slides              << sl;
             m_slideSectionIndices << si;
             // Show "中" marker in section label for Chinese slides
@@ -2592,8 +2846,8 @@ void LyricsDock::loadSongSlides(const Song &song)
                     this, &LyricsDock::onSlideBgAssign);
             connect(btn, &SlideButton::bgClearRequested,
                     this, &LyricsDock::onSlideBgClear);
-            if (!secBg.isEmpty())
-                btn->setBackgroundThumb(secBg);
+            if (cardSeg && !cardSeg->backgroundFor(globalIdx).isEmpty())
+                btn->setBackgroundThumb(cardSeg->backgroundFor(globalIdx));
             m_slideGrid->addWidget(btn, row, col);
             m_slideButtons << btn;
             if (++col >= cols) { col = 0; ++row; }
@@ -2609,6 +2863,11 @@ void LyricsDock::setActiveSlide(int index)
     for (auto *b : m_slideButtons)
         b->setActive(b->slideIndex() == index);
     m_activeSlide = index;
+    // Remember WHICH card is on air by its id, so edits that insert or remove cards cannot
+    // move it (live mode records it where the slide is pushed).
+    if (index < 0) { m_onAirSegId.clear(); m_onAirCardId.clear(); publishOnAir(); }
+    else if (!m_liveMode && m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+        rememberOnAir(m_segments[m_activeSegIdx], index);
     applyZoomToAll();
     updateSlideCounter();
 
@@ -2650,154 +2909,95 @@ void LyricsDock::applySlideBackground()
         }
     } else {
         if (m_activeSlide < 0 || m_activeSlide >= m_slides.size()) return;
-        // Per-card override in ServiceItem.slideBgs takes priority over section bg
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()) {
-            const auto &svcItem = m_serviceItems[m_activeServiceIdx];
-            if (svcItem.slideBgs.contains(m_activeSlide))
-                newBg = svcItem.slideBgs[m_activeSlide];
-        }
-        if (newBg.isEmpty())
-            newBg = m_slides[m_activeSlide].backgroundPath;
+        // The card's own background, else the segment's default (blank when neither).
+        if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+            newBg = m_segments[m_activeSegIdx].backgroundFor(m_activeSlide);
     }
 
-    int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
+    showBackground(newBg);
+}
+
+// Shared by every slide-card activation.  The fade itself (photo/video cross-fade rules,
+// duration from the global fade setting) lives in the renderer's applyBgPath(); this only
+// decides WHEN to call it: never for the background already on air, clear for blank.
+void LyricsDock::showBackground(const QString &newBg)
+{
+    const int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
     if (newBg.isEmpty()) {
-        if (!m_currentBgPath.isEmpty()) {
+        // A slide with no background of its own must not inherit the previous one.  Clear when
+        // the plugin believes one is up, OR when the renderer says one is (several panels reset
+        // the cache while their photo/video stays on air, which used to leave that media behind
+        // the next slide).
+        if (!m_currentBgPath.isEmpty() || lyrics_renderer_media_background_active()) {
             lyrics_renderer_media_clear(fadeMs);
             m_currentBgPath.clear();
+            if (m_wsServer) m_wsServer->broadcastMediaState(QString());   // remote: nothing on air
         }
         return;
     }
     if (newBg == m_currentBgPath) return;
     lyrics_renderer_media_push(newBg, fadeMs);
     m_currentBgPath = newBg;
+    if (m_wsServer) m_wsServer->broadcastMediaState(newBg);               // remote: this is on air
 }
 
 void LyricsDock::refreshSlideCardThumbs()
 {
-    const QMap<int,QString> *overrides = nullptr;
-    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
-        overrides = &m_serviceItems[m_activeServiceIdx].slideBgs;
-
-    for (auto *btn : m_slideButtons) {
-        int idx = btn->slideIndex();
-        QString bgPath;
-        if (overrides && overrides->contains(idx))
-            bgPath = (*overrides)[idx];
-        else if (idx >= 0 && idx < m_slides.size())
-            bgPath = m_slides[idx].backgroundPath;
-        btn->setBackgroundThumb(bgPath);
-    }
+    const Segment *seg = (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+                         ? &m_segments[m_activeSegIdx] : nullptr;
+    for (auto *btn : m_slideButtons)
+        btn->setBackgroundThumb(seg ? seg->backgroundFor(btn->slideIndex()) : QString());
 }
 
-void LyricsDock::onSlideBgAssign(int slideIndex, bool forSection)
+void LyricsDock::onSlideBgAssign(int slideIndex, bool forSegment)
 {
     // "Current background" = whatever is selected in the media gallery.
     // If nothing is selected, applying = clearing (empty path).
-    QString chosen = m_sharedGallery ? m_sharedGallery->activeItemPath() : QString();
+    const QString chosen = m_sharedGallery ? m_sharedGallery->activeItemPath() : QString();
 
-    if (m_paragraphMode) {
-        // Paragraphs: store per-slide bg in ServiceItem.slideBgs
-        if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return;
-        auto &item = m_serviceItems[m_activeServiceIdx];
-        if (item.type != ServiceItem::Type::Paragraphs) return;
+    if (m_activeSegIdx < 0 || m_activeSegIdx >= m_segments.size()) return;
+    auto &seg = m_segments[m_activeSegIdx];
+    if (seg.type != Segment::Type::Lyrics && seg.type != Segment::Type::Paragraphs) return;
+    seg.syncCards();   // the card queue must match the text before a card is touched
 
-        if (forSection) {
-            // Apply to all slides in this item
-            if (chosen.isEmpty()) {
-                item.slideBgs.clear();
-            } else {
-                QStringList slides = item.parseSlides();
-                for (int i = 0; i < slides.size(); ++i)
-                    item.slideBgs[i] = chosen;
-            }
-        } else {
-            if (chosen.isEmpty())
-                item.slideBgs.remove(slideIndex);
-            else
-                item.slideBgs[slideIndex] = chosen;
-        }
-        saveServiceOrder();
-        int savedActive = m_activeSlide;
-        loadParagraphSlides(item);
-        if (savedActive >= 0 && savedActive < m_slideButtons.size())
-            setActiveSlide(savedActive);
-        // Immediately push bg to OBS if a background was set
-        if (!chosen.isEmpty()) {
-            lyrics_renderer_media_push(chosen, 0);
-            m_currentBgPath = chosen;
-        }
-        return;
-    }
+    // Segment: the default every slide card inherits.  Card: that one card's own background.
+    if (forSegment)          seg.defaultBackground = chosen;
+    else                      seg.setCardBackground(slideIndex, chosen);
 
-    // Lyrics: store bg on the Song section
-    if (forSection) {
-        // Apply to all sections in m_currentSong
-        for (auto &sec : m_currentSong.sections)
-            sec.backgroundPath = chosen;
-        // Embed back into the service item
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
-            m_serviceItems[m_activeServiceIdx].sections = m_currentSong.sections;
-    } else {
-        // Card-level: store in the active ServiceItem's slideBgs map
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()) {
-            auto &svcItem = m_serviceItems[m_activeServiceIdx];
-            if (chosen.isEmpty())
-                svcItem.slideBgs.remove(slideIndex);
-            else
-                svcItem.slideBgs[slideIndex] = chosen;
-        }
-    }
-
-    // Keep library in sync
-    SongManager::instance().updateSong(m_currentSong);
-    SongManager::instance().save();
     saveServiceOrder();
-
-    // Rebuild slide data only — avoids destroying/recreating slide buttons (visual glitch).
-    // applySlideBackground() handles both assign and clear, and only updates OBS when
-    // the active slide's effective background actually changed.
-    m_slides = m_currentSong.allSlides();
-    refreshSlideCardThumbs();
-    applySlideBackground();
+    refreshAfterBackgroundChange();
 }
 
-void LyricsDock::onSlideBgClear(int slideIndex, bool forSection)
+void LyricsDock::onSlideBgClear(int slideIndex, bool forSegment)
 {
+    if (m_activeSegIdx < 0 || m_activeSegIdx >= m_segments.size()) return;
+    auto &seg = m_segments[m_activeSegIdx];
+    if (seg.type != Segment::Type::Lyrics && seg.type != Segment::Type::Paragraphs) return;
+    seg.syncCards();   // the card queue must match the text before a card is touched
+
+    // Segment: remove the default (cards with their own background keep it).
+    // Card: remove that card's own background, so it inherits the segment default again.
+    if (forSegment) seg.defaultBackground.clear();
+    else            seg.setCardBackground(slideIndex, QString());
+
+    saveServiceOrder();
+    refreshAfterBackgroundChange();
+}
+
+void LyricsDock::refreshAfterBackgroundChange()
+{
+    if (m_activeSegIdx < 0 || m_activeSegIdx >= m_segments.size()) return;
+    const Segment &seg = m_segments[m_activeSegIdx];
     if (m_paragraphMode) {
-        if (m_activeServiceIdx < 0 || m_activeServiceIdx >= m_serviceItems.size()) return;
-        auto &item = m_serviceItems[m_activeServiceIdx];
-        if (forSection)
-            item.slideBgs.clear();
-        else
-            item.slideBgs.remove(slideIndex);
-        saveServiceOrder();
-        int savedActive = m_activeSlide;
-        loadParagraphSlides(item);
+        const int savedActive = m_activeSlide;
+        loadParagraphSlides(seg);
         if (savedActive >= 0 && savedActive < m_slideButtons.size())
             setActiveSlide(savedActive);
+        // The card on air may now inherit or override a different background.
+        if (savedActive >= 0) showBackground(seg.backgroundFor(savedActive));
         return;
     }
-
-    int secIdx = (slideIndex >= 0 && slideIndex < m_slideSectionIndices.size())
-                 ? m_slideSectionIndices[slideIndex] : -1;
-
-    if (forSection) {
-        if (secIdx >= 0 && secIdx < m_currentSong.sections.size()) {
-            m_currentSong.sections[secIdx].backgroundPath.clear();
-            // Embed back into the service item
-            if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
-                m_serviceItems[m_activeServiceIdx].sections = m_currentSong.sections;
-        }
-    } else {
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size())
-            m_serviceItems[m_activeServiceIdx].slideBgs.remove(slideIndex);
-    }
-
-    SongManager::instance().updateSong(m_currentSong);
-    SongManager::instance().save();
-    saveServiceOrder();
-
+    // Lyrics: rebuild slide data only, not the buttons (destroying them causes a visual glitch).
     m_slides = m_currentSong.allSlides();
     refreshSlideCardThumbs();
     applySlideBackground();
@@ -2808,6 +3008,10 @@ void LyricsDock::pushCurrentSlide()
     if (m_activeSlide < 0 || m_activeSlide >= m_slides.size()) return;
     const LyricsSlide &sl  = m_slides[m_activeSlide];
     const QString     &title = m_currentSong.title;
+
+    // This segment's colour preset goes into the renderer now, with the slide it colours.
+    if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+        applySegmentPreset(m_segments[m_activeSegIdx]);
 
     applySlideBackground();  // transition background only when it actually changes
 
@@ -2829,60 +3033,71 @@ void LyricsDock::pushCurrentSlide()
 
 // ── Service Order slots ─────────────────────────────────────
 
-void LyricsDock::onAddServiceItem()
+void LyricsDock::onAddSegment()
 {
     QMenu menu(this);
     menu.setStyleSheet(
         "QMenu{background:#1e1e24;color:#f0f0f5;border:1px solid #3a3a48;}"
         "QMenu::item:selected{background:#2a4a6a;}");
-    struct { const char *label; ServiceItem::Type type; } types[] = {
-        {"Lyrics",       ServiceItem::Type::Lyrics},
-        {"Paragraphs",   ServiceItem::Type::Paragraphs},
-        {"Media",        ServiceItem::Type::Media},
-        {"Presentation", ServiceItem::Type::Presentation},
+    struct { const char *label; Segment::Type type; } types[] = {
+        {"Lyrics",       Segment::Type::Lyrics},
+        {"Paragraphs",   Segment::Type::Paragraphs},
+        {"Media",        Segment::Type::Media},
+        {"Presentation", Segment::Type::Presentation},
     };
     for (const auto &t : types)
         menu.addAction(t.label);
     auto *chosen = menu.exec(QCursor::pos());
     if (!chosen) return;
 
-    ServiceItem item;
+    Segment item;
     for (const auto &t : types)
         if (chosen->text() == t.label) { item.type = t.type; break; }
     item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
 
     // Lyrics: open song library popup
-    if (item.type == ServiceItem::Type::Lyrics) {
+    if (item.type == Segment::Type::Lyrics) {
+        // First time lyrics are added after an update: upgrade the song library file once
+        // (no-op afterwards).
+        SongManager::instance().ensureCurrent();
         SongLibraryPopup popup(this);
-        popup.setSequenceIds(m_sequenceSongIds);
+        // The popup works in library song ids: tell it which songs the service already has.
+        QList<QString> inService;
+        for (const auto &s : m_segments)
+            if (s.type == Segment::Type::Lyrics) inService << songIdOf(s);
+        popup.setSequenceIds(inService);
         if (popup.exec() != QDialog::Accepted) return;
-        for (int i = m_serviceItems.size() - 1; i >= 0; --i)
-            if (m_serviceItems[i].type == ServiceItem::Type::Lyrics
-                    && popup.deletedFromLibrary().contains(m_serviceItems[i].id))
-                removeServiceItem(i);
-        for (int i = m_serviceItems.size() - 1; i >= 0; --i)
-            if (m_serviceItems[i].type == ServiceItem::Type::Lyrics
-                    && popup.removedIds().contains(m_serviceItems[i].id))
-                removeServiceItem(i);
+        // Deleting a song from the song library does NOT remove it from the service:
+        // the segment is an independent copy.
+        for (int i = m_segments.size() - 1; i >= 0; --i)
+            if (m_segments[i].type == Segment::Type::Lyrics
+                    && popup.removedIds().contains(songIdOf(m_segments[i])))
+                removeSegment(i);
         for (const QString &id : popup.addedIds()) {
-            if (m_sequenceSongIds.contains(id)) continue;
+            bool already = false;
+            for (const auto &s : m_segments)
+                if (s.type == Segment::Type::Lyrics && songIdOf(s) == id) { already = true; break; }
+            if (already) continue;
             auto *song = SongManager::instance().findById(id);
             if (!song) continue;
-            ServiceItem si;
-            si.type     = ServiceItem::Type::Lyrics;
-            si.id       = id;
+            Segment si;
+            si.type         = Segment::Type::Lyrics;
+            si.id           = newId();
+            si.sourceSongId = id;
             si.title    = song->title;
             si.artist   = song->artist;
+            si.songKey = song->key; si.songTempo = song->tempo; si.songCopyright = song->copyright;
             si.sections = song->sections;  // embed full lyrics into service
-            int insertRow = m_serviceList->currentRow() + 1;
-            if (insertRow <= 0 || insertRow > m_serviceItems.size())
-                insertRow = m_serviceItems.size();
-            m_serviceItems.insert(insertRow, si);
+            si.syncCards();                // give every slide card its own id
+            int insertRow = m_segmentList->currentRow() + 1;
+            if (insertRow <= 0 || insertRow > m_segments.size())
+                insertRow = m_segments.size();
+            m_segments.insert(insertRow, si);
         }
-        rebuildServiceList();
+        rebuildSegmentList();
         m_sequenceSongIds.clear();
-        for (const auto &si : m_serviceItems)
-            if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+        for (const auto &si : m_segments)
+            if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
         saveServiceOrder();
         broadcastSequence();
         return;
@@ -2923,61 +3138,64 @@ void LyricsDock::onAddServiceItem()
     if (item.title.isEmpty())
         item.title = chosen->text();
 
-    int insertRow = m_serviceList->currentRow() + 1;
-    if (insertRow <= 0 || insertRow > m_serviceItems.size())
-        insertRow = m_serviceItems.size();
-    m_serviceItems.insert(insertRow, item);
-    rebuildServiceList();
+    // A new paragraph segment gets its own copy of the current DEFAULT layout.
+    ensureParagraphLayout(item);
+
+    int insertRow = m_segmentList->currentRow() + 1;
+    if (insertRow <= 0 || insertRow > m_segments.size())
+        insertRow = m_segments.size();
+    m_segments.insert(insertRow, item);
+    rebuildSegmentList();
     saveServiceOrder();
     if (m_wsServer) m_wsServer->broadcastServiceOrder(buildServiceOrderJson());
-    m_serviceList->setCurrentRow(insertRow);
+    m_segmentList->setCurrentRow(insertRow);
 }
 
-void LyricsDock::onRemoveServiceItem()
+void LyricsDock::onRemoveSegment()
 {
-    int row = m_serviceList->currentRow();
+    int row = m_segmentList->currentRow();
     if (row < 0) return;
-    removeServiceItem(row);
-    updateServiceItemButtons();
+    removeSegment(row);
+    updateSegmentButtons();
 }
 
-void LyricsDock::onServiceItemUp()
+void LyricsDock::onSegmentUp()
 {
-    int row = m_serviceList->currentRow();
+    int row = m_segmentList->currentRow();
     if (row <= 0) return;
-    m_serviceItems.swapItemsAt(row, row - 1);
+    m_segments.swapItemsAt(row, row - 1);
     // Also swap in widget
-    auto *taken = m_serviceList->takeItem(row);
-    m_serviceList->insertItem(row - 1, taken);
-    m_serviceList->setCurrentRow(row - 1);
+    auto *taken = m_segmentList->takeItem(row);
+    m_segmentList->insertItem(row - 1, taken);
+    m_segmentList->setCurrentRow(row - 1);
     // Rebuild sequenceSongIds
     m_sequenceSongIds.clear();
-    for (const auto &si : m_serviceItems)
-        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+    for (const auto &si : m_segments)
+        if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
     saveServiceOrder();
     broadcastSequence();
 }
 
-void LyricsDock::onServiceItemDown()
+void LyricsDock::onSegmentDown()
 {
-    int row = m_serviceList->currentRow();
-    if (row < 0 || row >= m_serviceItems.size() - 1) return;
-    m_serviceItems.swapItemsAt(row, row + 1);
-    auto *taken = m_serviceList->takeItem(row);
-    m_serviceList->insertItem(row + 1, taken);
-    m_serviceList->setCurrentRow(row + 1);
+    int row = m_segmentList->currentRow();
+    if (row < 0 || row >= m_segments.size() - 1) return;
+    m_segments.swapItemsAt(row, row + 1);
+    auto *taken = m_segmentList->takeItem(row);
+    m_segmentList->insertItem(row + 1, taken);
+    m_segmentList->setCurrentRow(row + 1);
     m_sequenceSongIds.clear();
-    for (const auto &si : m_serviceItems)
-        if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+    for (const auto &si : m_segments)
+        if (si.type == Segment::Type::Lyrics) m_sequenceSongIds << si.id;
     saveServiceOrder();
     broadcastSequence();
 }
 
-void LyricsDock::onServiceItemSelected(int row)
+void LyricsDock::onSegmentSelected(int row)
 {
-    m_activeServiceIdx = row;
-    updateServiceItemButtons();
-    if (row < 0 || row >= m_serviceItems.size()) {
+    m_activeSegIdx = row;
+    updateSegmentButtons();
+    if (row < 0 || row >= m_segments.size()) {
         if (!m_liveMode && m_contentStack)
             m_contentStack->setCurrentIndex(3);
         return;
@@ -2990,33 +3208,33 @@ void LyricsDock::onServiceItemSelected(int row)
         }
         return;
     }
-    loadServiceItemContent(row);
+    loadSegmentContent(row);
 }
 
-void LyricsDock::loadServiceItemContent(int idx)
+void LyricsDock::loadSegmentContent(int idx)
 {
-    if (idx < 0 || idx >= m_serviceItems.size()) {
+    if (idx < 0 || idx >= m_segments.size()) {
         if (m_contentStack) m_contentStack->setCurrentIndex(3);
         return;
     }
-    const auto &item = m_serviceItems[idx];
-    // Restore saved color preset for this section
+    // Make sure the segment's card queue matches its text before the cards are shown
+    // (idempotent: nothing changes when it is already in step).
+    m_segments[idx].syncCards();
+    if (ensureParagraphLayout(m_segments[idx])) saveServiceOrder();   // paragraph segments own their layout
+    const auto &item = m_segments[idx];
+    // Show the segment's saved colour preset in the panel (card label colour + highlighted
+    // button).  The RENDERER is deliberately not touched here: selecting a segment must not
+    // recolour the slide that is on air.  The preset reaches the renderer when one of the
+    // segment's slides is pushed (applySegmentPreset).
     if (item.colorPresetIdx >= 0 && item.colorPresetIdx < 6 && m_colorBtn[item.colorPresetIdx]) {
-        QColor fc = m_colorBtn[item.colorPresetIdx]->fontColor();
-        QColor oc = m_colorBtn[item.colorPresetIdx]->outlineColor();
-        uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() <<  8) | (uint32_t)fc.red();
-        uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() <<  8) | (uint32_t)oc.red();
-        lyrics_renderer_set_text_color(fcObs, ocObs);
-        lyrics_renderer_set_paragraph_text_color(fcObs, ocObs); // paragraph sections
-        lyrics_renderer_set_chinese_color(fcObs, ocObs);
-        m_slideFontColor = fc;
+        m_slideFontColor = m_colorBtn[item.colorPresetIdx]->fontColor();
         // Highlight the matching button
         for (int j = 0; j < 6; ++j)
             if (m_colorBtn[j]) m_colorBtn[j]->setActive(j == item.colorPresetIdx);
     }
 
     switch (item.type) {
-    case ServiceItem::Type::Lyrics: {
+    case Segment::Type::Lyrics: {
         m_paragraphMode = false;
         m_contentStack->setCurrentIndex(0);
         int seqRow = m_sequenceSongIds.indexOf(item.id);
@@ -3031,49 +3249,50 @@ void LyricsDock::loadServiceItemContent(int idx)
         }
         break;
     }
-    case ServiceItem::Type::Paragraphs:
+    case Segment::Type::Paragraphs:
         m_paragraphMode = true;
         m_contentStack->setCurrentIndex(0);
         loadParagraphSlides(item);
         break;
-    case ServiceItem::Type::Media:
+    case Segment::Type::Media:
         m_paragraphMode = false;
         m_contentStack->setCurrentIndex(1);
         if (m_videoTab) m_videoTab->setMediaList(item.mediaPaths);
         break;
-    case ServiceItem::Type::Presentation:
+    case Segment::Type::Presentation:
         m_paragraphMode = false;
         m_contentStack->setCurrentIndex(2);
-        if (m_pptTab) { m_pptTab->requestShow(0, item.windowExe); m_currentBgPath.clear(); }
+        bindPptItem(idx);
+        m_currentBgPath.clear();
         break;
     }
 }
 
-void LyricsDock::updateServiceItemButtons()
+void LyricsDock::updateSegmentButtons()
 {
-    int row = m_serviceList ? m_serviceList->currentRow() : -1;
-    bool has = (row >= 0 && row < m_serviceItems.size());
+    int row = m_segmentList ? m_segmentList->currentRow() : -1;
+    bool has = (row >= 0 && row < m_segments.size());
     if (m_removeItemBtn) m_removeItemBtn->setEnabled(has);
     if (m_itemUpBtn)   m_itemUpBtn->setEnabled(has && row > 0);
-    if (m_itemDownBtn) m_itemDownBtn->setEnabled(has && row < m_serviceItems.size() - 1);
+    if (m_itemDownBtn) m_itemDownBtn->setEnabled(has && row < m_segments.size() - 1);
 }
 
-void LyricsDock::rebuildServiceList()
+void LyricsDock::rebuildSegmentList()
 {
-    if (!m_serviceList) return;
-    QSignalBlocker blk(m_serviceList);
-    m_serviceList->clear();
-    for (const auto &item : m_serviceItems) {
+    if (!m_segmentList) return;
+    QSignalBlocker blk(m_segmentList);
+    m_segmentList->clear();
+    for (const auto &item : m_segments) {
         auto *lwi = new QListWidgetItem;
         lwi->setData(Qt::UserRole, QVariant::fromValue(item));
         lwi->setSizeHint({1, 52});
-        m_serviceList->addItem(lwi);
+        m_segmentList->addItem(lwi);
     }
 }
 
 // ── loadParagraphSlides ───────────────────────────────────────
 
-void LyricsDock::loadParagraphSlides(const ServiceItem &item)
+void LyricsDock::loadParagraphSlides(const Segment &item)
 {
     clearSlideGrid();
     QStringList slides = item.parseSlides();
@@ -3093,8 +3312,8 @@ void LyricsDock::loadParagraphSlides(const ServiceItem &item)
         btn->setSectionColor(item.typeColor());
         btn->setFontColor(m_slideFontColor);
         btn->applyScale(m_slideScale, m_slideFontFamily, cardW);
-        if (item.slideBgs.contains(i))
-            btn->setBackgroundThumb(item.slideBgs[i]);
+        if (!item.backgroundFor(i).isEmpty())
+            btn->setBackgroundThumb(item.backgroundFor(i));
         connect(btn, &SlideButton::clicked, this, &LyricsDock::onSlideClicked);
         connect(btn, &SlideButton::bgAssignRequested, this, &LyricsDock::onSlideBgAssign);
         connect(btn, &SlideButton::bgClearRequested,  this, &LyricsDock::onSlideBgClear);
@@ -3123,16 +3342,16 @@ void LyricsDock::buildAllLiveSlides()
     int row = 0, col = 0;
     int globalIdx = 0;
 
-    for (int svcIdx = 0; svcIdx < m_serviceItems.size(); ++svcIdx) {
-        const auto &svcItem = m_serviceItems[svcIdx];
+    for (int segIdx = 0; segIdx < m_segments.size(); ++segIdx) {
+        const auto &seg = m_segments[segIdx];
 
         // Flush current row before separator so it spans the full width
         if (col > 0) { col = 0; ++row; }
 
-        // ── Separator row with service item title ──────────────────
+        // ── Separator row with segment title ──────────────────
         auto *sep = new QWidget(m_slideContainer);
         sep->setFixedHeight(28);
-        const QColor tc = svcItem.typeColor();
+        const QColor tc = seg.typeColor();
         sep->setStyleSheet(
             QString("background: rgba(%1,%2,%3,22);")
             .arg(tc.red()).arg(tc.green()).arg(tc.blue()));
@@ -3148,9 +3367,9 @@ void LyricsDock::buildAllLiveSlides()
         sepL->addWidget(stripe);
 
         // First-character badge
-        QString firstChar = svcItem.title.isEmpty()
-            ? svcItem.typeLabel().left(1)
-            : QString(svcItem.title.at(0));
+        QString firstChar = seg.title.isEmpty()
+            ? seg.typeLabel().left(1)
+            : QString(seg.title.at(0));
         auto *badge = new QLabel(firstChar, sep);
         badge->setFixedSize(20, 20);
         badge->setAlignment(Qt::AlignCenter);
@@ -3164,7 +3383,7 @@ void LyricsDock::buildAllLiveSlides()
 
         // Section title
         auto *lbl = new QLabel(
-            svcItem.title.isEmpty() ? svcItem.typeLabel() : svcItem.title, sep);
+            seg.title.isEmpty() ? seg.typeLabel() : seg.title, sep);
         lbl->setStyleSheet(
             QString("color: %1; font-size: 10px; font-weight: bold; background: transparent;")
             .arg(tc.name()));
@@ -3174,25 +3393,24 @@ void LyricsDock::buildAllLiveSlides()
         ++row;
 
         // Use this section's saved color preset for its slide buttons
-        QColor svcFontColor = m_slideFontColor;
-        if (svcItem.colorPresetIdx >= 0 && svcItem.colorPresetIdx < 6
-            && m_colorBtn[svcItem.colorPresetIdx])
-            svcFontColor = m_colorBtn[svcItem.colorPresetIdx]->fontColor();
+        QColor segFontColor = m_slideFontColor;
+        if (seg.colorPresetIdx >= 0 && seg.colorPresetIdx < 6
+            && m_colorBtn[seg.colorPresetIdx])
+            segFontColor = m_colorBtn[seg.colorPresetIdx]->fontColor();
 
-        // ── Slides for this service item ───────────────────────────
-        if (svcItem.type == ServiceItem::Type::Lyrics) {
-            Song song = songFromItem(svcItem);
+        // ── Slides for this segment ───────────────────────────
+        if (seg.type == Segment::Type::Lyrics) {
+            Song song = songFromItem(seg);
             {
                 const auto allSlides = song.allSlides();
                 for (int i = 0; i < allSlides.size(); ++i) {
                     const auto &sl = allSlides[i];
                     auto *btn = new SlideButton(sl.section, sl.text,
-                                               globalIdx, svcIdx, i + 1, m_slideContainer);
-                    btn->setFontColor(svcFontColor);
+                                               globalIdx, segIdx, i + 1, m_slideContainer);
+                    btn->setFontColor(segFontColor);
                     btn->applyScale(m_slideScale, m_slideFontFamily, cardW);
-                    // Background: card-level override first, then section default
-                    QString bgPath = svcItem.slideBgs.value(i);
-                    if (bgPath.isEmpty()) bgPath = sl.backgroundPath;
+                    // Background: the card's own, else the segment default (blank when none)
+                    const QString bgPath = seg.backgroundFor(i);
                     if (!bgPath.isEmpty()) btn->setBackgroundThumb(bgPath);
                     connect(btn, &SlideButton::clicked, this, &LyricsDock::onSlideClicked);
                     m_slideGrid->addWidget(btn, row, col);
@@ -3201,25 +3419,25 @@ void LyricsDock::buildAllLiveSlides()
                     ++globalIdx;
                 }
             }
-        } else if (svcItem.type == ServiceItem::Type::Paragraphs) {
-            QStringList slides = svcItem.parseSlides();
+        } else if (seg.type == Segment::Type::Paragraphs) {
+            QStringList slides = seg.parseSlides();
             for (int i = 0; i < slides.size(); ++i) {
-                auto *btn = new SlideButton(svcItem.title.left(12), slides[i],
-                                           globalIdx, svcIdx, i + 1, m_slideContainer);
-                btn->setSectionColor(svcItem.typeColor());
-                btn->setFontColor(svcFontColor);
+                auto *btn = new SlideButton(seg.title.left(12), slides[i],
+                                           globalIdx, segIdx, i + 1, m_slideContainer);
+                btn->setSectionColor(seg.typeColor());
+                btn->setFontColor(segFontColor);
                 btn->applyScale(m_slideScale, m_slideFontFamily, cardW);
-                if (svcItem.slideBgs.contains(i))
-                    btn->setBackgroundThumb(svcItem.slideBgs[i]);
+                if (!seg.backgroundFor(i).isEmpty())
+                    btn->setBackgroundThumb(seg.backgroundFor(i));
                 connect(btn, &SlideButton::clicked, this, &LyricsDock::onSlideClicked);
                 m_slideGrid->addWidget(btn, row, col);
                 m_slideButtons << btn;
                 if (++col >= cols) { col = 0; ++row; }
                 ++globalIdx;
             }
-        } else if (svcItem.type == ServiceItem::Type::Media) {
-            for (int fi = 0; fi < svcItem.mediaPaths.size(); ++fi) {
-                auto *card = new MediaSlideCard(svcItem.mediaPaths[fi], svcIdx, fi, m_slideContainer);
+        } else if (seg.type == Segment::Type::Media) {
+            for (int fi = 0; fi < seg.mediaPaths.size(); ++fi) {
+                auto *card = new MediaSlideCard(seg.mediaPaths[fi], segIdx, fi, m_slideContainer);
                 card->setFixedWidth(cardW);
                 connect(card, &MediaSlideCard::clicked,          this, &LyricsDock::onLiveMediaCardClicked);
                 connect(card, &MediaSlideCard::playPauseClicked, this, &LyricsDock::onLiveMediaPlayPause);
@@ -3228,20 +3446,20 @@ void LyricsDock::buildAllLiveSlides()
                 m_liveExtraCards << card;
                 if (++col >= cols) { col = 0; ++row; }
             }
-            if (svcItem.mediaPaths.isEmpty()) {
-                // Placeholder card so media service items are visible in live mode
+            if (seg.mediaPaths.isEmpty()) {
+                // Placeholder card so media segments are visible in live mode
                 auto *btn = new SlideButton("[Media]",
-                                            svcItem.title.isEmpty() ? "(no media)" : svcItem.title,
-                                            globalIdx, svcIdx, 1, m_slideContainer);
-                btn->setSectionColor(svcItem.typeColor());
+                                            seg.title.isEmpty() ? "(no media)" : seg.title,
+                                            globalIdx, segIdx, 1, m_slideContainer);
+                btn->setSectionColor(seg.typeColor());
                 btn->applyScale(m_slideScale, m_slideFontFamily, cardW);
                 m_slideGrid->addWidget(btn, row, col);
                 m_slideButtons << btn;
                 if (++col >= cols) { col = 0; ++row; }
                 ++globalIdx;
             }
-        } else if (svcItem.type == ServiceItem::Type::Presentation) {
-            auto *card = new PptLiveCard(svcItem.title, svcIdx, m_slideContainer);
+        } else if (seg.type == Segment::Type::Presentation) {
+            auto *card = new PptLiveCard(seg.title, segIdx, m_slideContainer);
             card->setFixedWidth(cardW);
             connect(card, &PptLiveCard::activateRequested, this, &LyricsDock::onLivePptActivate);
             connect(card, &PptLiveCard::prevRequested,     this, &LyricsDock::onLivePptPrev);
@@ -3278,8 +3496,8 @@ void LyricsDock::onLiveToggled(bool on)
         buildAllLiveSlides();
     } else {
         m_currentBgPath.clear();
-        int row = m_serviceList ? m_serviceList->currentRow() : -1;
-        if (row >= 0) loadServiceItemContent(row);
+        int row = m_segmentList ? m_segmentList->currentRow() : -1;
+        if (row >= 0) loadSegmentContent(row);
         else m_contentStack->setCurrentIndex(3);
     }
 }
@@ -3287,10 +3505,10 @@ void LyricsDock::onLiveToggled(bool on)
 // ── Live media card slots ─────────────────────────────────────
 
 // Push a media file to OBS and update card visuals. Called only for a fresh start.
-void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
+void LyricsDock::onLiveMediaCardClicked(int segIdx, int fileIdx)
 {
     // Same card — handle resume / pause / play based on current state
-    if (m_liveMediaSvcIdx == svcIdx && m_liveMediaFileIdx == fileIdx) {
+    if (isLiveMedia(segIdx, fileIdx)) {
         if (m_liveMediaPaused) {
             // Resume: use play_pause API — never re-push (that crashes OBS)
             lyrics_renderer_mv_play_pause(false);
@@ -3298,14 +3516,14 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
             m_liveMediaPaused  = false;
             for (auto *w : m_liveExtraCards) {
                 if (auto *card = qobject_cast<MediaSlideCard*>(w))
-                    if (card->svcIdx() == svcIdx && card->fileIdx() == fileIdx)
+                    if (card->segIdx() == segIdx && card->fileIdx() == fileIdx)
                         card->setPlaying(true, false);
             }
             return;
         }
         if (m_liveMediaPlaying) {
             // Already playing — treat click as pause
-            onLiveMediaPlayPause(svcIdx, fileIdx);
+            onLiveMediaPlayPause(segIdx, fileIdx);
             return;
         }
         // Fully stopped on the same card — fall through to fresh start below
@@ -3316,12 +3534,11 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
             lyrics_renderer_media_clear();
             for (auto *w : m_liveExtraCards) {
                 if (auto *card = qobject_cast<MediaSlideCard*>(w))
-                    if (card->svcIdx() == m_liveMediaSvcIdx && card->fileIdx() == m_liveMediaFileIdx)
+                    if (isLiveMedia(card->segIdx(), card->fileIdx()))
                         card->setPlaying(false, false);
             }
         }
-        m_liveMediaSvcIdx  = svcIdx;
-        m_liveMediaFileIdx = fileIdx;
+        setLiveMedia(segIdx, fileIdx);
         m_liveMediaPlaying = false;
         m_liveMediaPaused  = false;
     }
@@ -3329,7 +3546,7 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
     // Stop any active presentation (mutual exclusion)
     if (m_pptTab && m_pptTab->activeType() >= 0) {
         m_pptTab->requestShow(-1);
-        m_activePptSvcIdx = -1;
+        m_activePptSegId.clear();
         for (auto *w : m_liveExtraCards) {
             if (auto *c = qobject_cast<PptLiveCard*>(w))
                 c->setActive(false);
@@ -3337,8 +3554,8 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
     }
 
     // Fresh start
-    if (svcIdx < 0 || svcIdx >= m_serviceItems.size()) return;
-    const QString &path = m_serviceItems[svcIdx].mediaPaths.value(fileIdx);
+    if (segIdx < 0 || segIdx >= m_segments.size()) return;
+    const QString &path = m_segments[segIdx].mediaPaths.value(fileIdx);
     if (path.isEmpty()) return;
 
     // Clear any displayed lyrics/CTW text so only the media is visible
@@ -3356,22 +3573,23 @@ void LyricsDock::onLiveMediaCardClicked(int svcIdx, int fileIdx)
 
     for (auto *w : m_liveExtraCards) {
         if (auto *card = qobject_cast<MediaSlideCard*>(w))
-            card->setPlaying(card->svcIdx() == svcIdx && card->fileIdx() == fileIdx, false);
+            card->setPlaying(card->segIdx() == segIdx && card->fileIdx() == fileIdx, false);
     }
-    setActiveSlide(-1);
+    setActiveSlide(-1);                          // no lyrics/paragraph slide is on air now ...
+    rememberOnAir(m_segments[segIdx], fileIdx);  // ... this media card is (the remote follows it)
 }
 
-void LyricsDock::onLiveMediaPlayPause(int svcIdx, int fileIdx)
+void LyricsDock::onLiveMediaPlayPause(int segIdx, int fileIdx)
 {
-    if (m_liveMediaSvcIdx != svcIdx || m_liveMediaFileIdx != fileIdx) {
-        onLiveMediaCardClicked(svcIdx, fileIdx);
+    if (!isLiveMedia(segIdx, fileIdx)) {
+        onLiveMediaCardClicked(segIdx, fileIdx);
         return;
     }
 
     if (m_liveMediaPaused) {
         // Resume
-        if (svcIdx >= 0 && svcIdx < m_serviceItems.size()) {
-            const QString &p = m_serviceItems[svcIdx].mediaPaths.value(fileIdx);
+        if (segIdx >= 0 && segIdx < m_segments.size()) {
+            const QString &p = m_segments[segIdx].mediaPaths.value(fileIdx);
             if (isVideoFile(p)) {
                 // Video: resume via play_pause API (never re-push)
                 lyrics_renderer_mv_play_pause(false);
@@ -3384,7 +3602,7 @@ void LyricsDock::onLiveMediaPlayPause(int svcIdx, int fileIdx)
         m_liveMediaPaused  = false;
         for (auto *w : m_liveExtraCards) {
             if (auto *card = qobject_cast<MediaSlideCard*>(w))
-                if (card->svcIdx() == svcIdx && card->fileIdx() == fileIdx)
+                if (card->segIdx() == segIdx && card->fileIdx() == fileIdx)
                     card->setPlaying(true, false);
         }
         return;
@@ -3392,13 +3610,13 @@ void LyricsDock::onLiveMediaPlayPause(int svcIdx, int fileIdx)
 
     if (!m_liveMediaPlaying) {
         // Fully stopped — fresh start
-        onLiveMediaCardClicked(svcIdx, fileIdx);
+        onLiveMediaCardClicked(segIdx, fileIdx);
         return;
     }
 
     // Currently playing — pause it
-    if (svcIdx >= 0 && svcIdx < m_serviceItems.size()) {
-        const QString &p = m_serviceItems[svcIdx].mediaPaths.value(fileIdx);
+    if (segIdx >= 0 && segIdx < m_segments.size()) {
+        const QString &p = m_segments[segIdx].mediaPaths.value(fileIdx);
         if (isVideoFile(p))
             lyrics_renderer_mv_play_pause(true);
         else
@@ -3409,18 +3627,18 @@ void LyricsDock::onLiveMediaPlayPause(int svcIdx, int fileIdx)
 
     for (auto *w : m_liveExtraCards) {
         if (auto *card = qobject_cast<MediaSlideCard*>(w))
-            if (card->svcIdx() == svcIdx && card->fileIdx() == fileIdx)
+            if (card->segIdx() == segIdx && card->fileIdx() == fileIdx)
                 card->setPlaying(true, true);
     }
 }
 
-void LyricsDock::onLiveMediaRewind(int svcIdx, int fileIdx)
+void LyricsDock::onLiveMediaRewind(int segIdx, int fileIdx)
 {
-    if (svcIdx < 0 || svcIdx >= m_serviceItems.size()) return;
-    const auto &item = m_serviceItems[svcIdx];
+    if (segIdx < 0 || segIdx >= m_segments.size()) return;
+    const auto &item = m_segments[segIdx];
     if (fileIdx < 0 || fileIdx >= item.mediaPaths.size()) return;
 
-    if (m_liveMediaSvcIdx == svcIdx && m_liveMediaFileIdx == fileIdx) {
+    if (isLiveMedia(segIdx, fileIdx)) {
         // Seek to start; if paused stay paused (user can then press play)
         if (isVideoFile(item.mediaPaths[fileIdx])) {
             lyrics_renderer_mv_set_time(0);
@@ -3434,25 +3652,238 @@ void LyricsDock::onLiveMediaRewind(int svcIdx, int fileIdx)
             m_liveMediaPaused  = false;
             for (auto *w : m_liveExtraCards) {
                 if (auto *card = qobject_cast<MediaSlideCard*>(w))
-                    if (card->svcIdx() == svcIdx && card->fileIdx() == fileIdx)
+                    if (card->segIdx() == segIdx && card->fileIdx() == fileIdx)
                         card->setPlaying(true, false);
             }
         }
     } else {
         // Rewind on an inactive card — start it from the beginning
-        onLiveMediaCardClicked(svcIdx, fileIdx);
+        onLiveMediaCardClicked(segIdx, fileIdx);
     }
 }
 
 // ── Live presentation card slots ──────────────────────────────
 
-static void pptEnsureActive(PptTab *pptTab) {
-    if (!pptTab) return;
-    if (pptTab->isActive()) return; // already showing (or blanked but still live)
-    pptTab->requestShow(0);
+// ── On-air tracking by id ─────────────────────────────────────
+// What is on air is remembered by id, not by position, so inserting / removing / reordering
+// cards or segments cannot silently move it.
+
+void LyricsDock::rememberOnAir(const Segment &seg, int slideIdx)
+{
+    m_onAirSegId  = seg.id;
+    m_onAirCardId = seg.cardIdAt(slideIdx);
+    publishOnAir();
 }
 
-void LyricsDock::onLivePptActivate(int svcIdx)
+// What the Live Preview remote shows and navigates from.  A presentation that is showing wins;
+// otherwise it is the on-air slide / media card.  Sent only when it actually changed.
+void LyricsDock::publishOnAir()
+{
+    if (!m_wsServer) return;
+    int segIdx = -1, slideIdx = -1;
+    QString segId, cardId, kind;
+
+    if (m_pptTab && m_pptTab->activeType() >= 0) {
+        segIdx = segmentIndexById(m_pptBoundSegId);
+        if (segIdx >= 0) { segId = m_pptBoundSegId; slideIdx = 0; kind = "presentation"; }
+    }
+    if (segIdx < 0 && !m_onAirCardId.isEmpty()) {
+        segIdx = segmentIndexById(m_onAirSegId);
+        if (segIdx >= 0) {
+            const Segment &s = m_segments[segIdx];
+            slideIdx = s.cardIndexById(m_onAirCardId);
+            if (slideIdx >= 0) { segId = s.id; cardId = m_onAirCardId; kind = s.typeLabel().toLower(); }
+            else               { segIdx = -1; }
+        }
+    }
+
+    QJsonObject o;
+    o["type"]     = "onAir";
+    o["segIdx"]   = segIdx;
+    o["segId"]    = segId;
+    o["slideIdx"] = slideIdx;
+    o["cardId"]   = cardId;
+    o["kind"]     = kind;
+    const QByteArray key = QJsonDocument(o).toJson(QJsonDocument::Compact);
+    if (key == m_lastOnAirKey) return;
+    m_lastOnAirKey = key;
+    m_wsServer->broadcastOnAir(o);
+}
+
+bool LyricsDock::resolveOnAir(int &segIdx, int &cardIdx) const
+{
+    if (m_onAirCardId.isEmpty()) return false;
+    for (int i = 0; i < m_segments.size(); ++i) {
+        if (m_segments[i].id != m_onAirSegId) continue;
+        const int c = m_segments[i].cardIndexById(m_onAirCardId);
+        if (c < 0) return false;
+        segIdx = i;
+        cardIdx = c;
+        return true;
+    }
+    return false;
+}
+
+// The queue is: segments in service order, each with its slide cards in on-air order (Lyrics,
+// Paragraphs and Media contribute one stop per card; a Presentation is one stop).  Next/Previous
+// move to the neighbouring stop, crossing into the next / previous segment at its end.  A
+// presentation on air never reaches here (it keeps Next/Previous for itself).
+bool LyricsDock::navigateQueue(int delta)
+{
+    auto stops = [](const Segment &s) -> int {
+        switch (s.type) {
+        case Segment::Type::Lyrics:
+        case Segment::Type::Paragraphs:
+        case Segment::Type::Media:        return (int)s.cards.size();
+        case Segment::Type::Presentation: return 1;
+        }
+        return 0;
+    };
+
+    int segIdx = -1, cardIdx = -1;
+    if (!resolveOnAir(segIdx, cardIdx)) {
+        // Nothing on air yet: Next starts at the first stop, Previous at the last one.
+        segIdx  = (delta > 0) ? -1 : (int)m_segments.size();
+        cardIdx = 0;
+    }
+
+    int ts = -1, tc = -1;
+    if (delta > 0) {
+        if (segIdx >= 0 && segIdx < m_segments.size() && cardIdx + 1 < stops(m_segments[segIdx])) {
+            ts = segIdx; tc = cardIdx + 1;
+        } else {
+            for (int s = segIdx + 1; s < m_segments.size(); ++s)
+                if (stops(m_segments[s]) > 0) { ts = s; tc = 0; break; }
+        }
+    } else {
+        if (segIdx >= 0 && segIdx < m_segments.size() && cardIdx - 1 >= 0) {
+            ts = segIdx; tc = cardIdx - 1;
+        } else {
+            for (int s = segIdx - 1; s >= 0; --s)
+                if (stops(m_segments[s]) > 0) { ts = s; tc = stops(m_segments[s]) - 1; break; }
+        }
+    }
+    if (ts < 0) return false;            // already at the end (or the start) of the service
+    activateSlideFromRemote(ts, tc);
+    return true;
+}
+
+// Where the on-air slide card sits NOW inside `seg` (-1 = nothing on air here, or its card was
+// deleted).  Call it before the slide grid is rebuilt: the rebuild resets m_activeSlide.
+int LyricsDock::onAirIndexIn(const Segment &seg) const
+{
+    if (m_activeSlide < 0) return -1;                      // nothing on air in this view
+    if (m_onAirSegId == seg.id && !m_onAirCardId.isEmpty())
+        return seg.cardIndexById(m_onAirCardId);           // follow the card by its id
+    return m_activeSlide;                                  // no id recorded: keep the position
+}
+
+int LyricsDock::liveGlobalIndexOnAir() const
+{
+    if (m_onAirCardId.isEmpty()) return -1;
+    int global = 0;
+    for (const auto &seg : m_segments) {
+        if (seg.type == Segment::Type::Lyrics || seg.type == Segment::Type::Paragraphs) {
+            if (seg.id == m_onAirSegId) {
+                const int i = seg.cardIndexById(m_onAirCardId);
+                return i >= 0 ? global + i : -1;
+            }
+            global += seg.cards.size();          // one live slide button per slide card
+        } else if (seg.type == Segment::Type::Media && seg.mediaPaths.isEmpty()) {
+            ++global;                            // the placeholder card of an empty media segment
+        }
+    }
+    return -1;
+}
+
+bool LyricsDock::isLiveMedia(int segIdx, int fileIdx) const
+{
+    if (segIdx < 0 || segIdx >= m_segments.size() || m_liveMediaCardId.isEmpty()) return false;
+    const Segment &seg = m_segments[segIdx];
+    return seg.id == m_liveMediaSegId && seg.cardIdAt(fileIdx) == m_liveMediaCardId;
+}
+
+void LyricsDock::setLiveMedia(int segIdx, int fileIdx)
+{
+    if (segIdx < 0 || segIdx >= m_segments.size()) { clearLiveMedia(); return; }
+    m_segments[segIdx].syncCards();   // the media card queue must be in step before it is used
+    m_liveMediaSegId  = m_segments[segIdx].id;
+    m_liveMediaCardId = m_segments[segIdx].cardIdAt(fileIdx);
+}
+
+void LyricsDock::clearLiveMedia()
+{
+    m_liveMediaSegId.clear();
+    m_liveMediaCardId.clear();
+}
+
+QString LyricsDock::liveMediaPath() const
+{
+    if (m_liveMediaCardId.isEmpty()) return QString();
+    for (const auto &seg : m_segments) {
+        if (seg.id != m_liveMediaSegId) continue;
+        const int i = seg.cardIndexById(m_liveMediaCardId);
+        return i >= 0 ? seg.mediaPaths.value(i) : QString();
+    }
+    return QString();
+}
+
+bool LyricsDock::isLivePpt(int segIdx) const
+{
+    return segIdx >= 0 && segIdx < m_segments.size()
+        && !m_activePptSegId.isEmpty() && m_segments[segIdx].id == m_activePptSegId;
+}
+
+void LyricsDock::setLivePpt(int segIdx)
+{
+    if (segIdx >= 0 && segIdx < m_segments.size()) m_activePptSegId = m_segments[segIdx].id;
+}
+
+bool LyricsDock::ensureParagraphLayout(Segment &seg)
+{
+    if (seg.type != Segment::Type::Paragraphs) return false;
+    const QJsonObject def = QJsonDocument::fromJson(lyrics_renderer_paragraph_layout_snapshot()).object();
+    bool changed = false;
+    for (auto it = def.constBegin(); it != def.constEnd(); ++it) {
+        if (!seg.paragraphLayout.contains(it.key())) {
+            seg.paragraphLayout.insert(it.key(), it.value());
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+void LyricsDock::syncAllCards()
+{
+    for (auto &seg : m_segments) seg.syncCards();
+}
+
+int LyricsDock::segmentIndexById(const QString &id) const
+{
+    if (id.isEmpty()) return -1;
+    for (int i = 0; i < m_segments.size(); ++i)
+        if (m_segments[i].id == id) return i;
+    return -1;
+}
+
+// Every path that shows a Presentation item (edit-mode select, remote activate,
+// live cards) goes through here so the shared capture always follows the item's
+// own saved window and COM setting — never whatever the previous item left behind.
+void LyricsDock::bindPptItem(int segIdx)
+{
+    if (!m_pptTab || segIdx < 0 || segIdx >= m_segments.size()) return;
+    const Segment &it = m_segments[segIdx];
+    if (it.type != Segment::Type::Presentation) return;
+    m_pptBoundSegId = it.id;
+    PptBinding b;
+    b.title   = it.windowTitle;
+    b.exe     = it.windowProc;
+    b.cls     = it.windowCls;
+    b.comMode = it.pptComMode;
+    m_pptTab->bindItem(b);
+}
+
+void LyricsDock::onLivePptActivate(int segIdx)
 {
     if (!m_pptTab) return;
 
@@ -3466,14 +3897,13 @@ void LyricsDock::onLivePptActivate(int svcIdx)
         }
         m_liveMediaPlaying = false;
         m_liveMediaPaused  = false;
-        m_liveMediaSvcIdx  = -1;
-        m_liveMediaFileIdx = -1;
+        clearLiveMedia();
     }
 
     // Toggle: clicking an already-active card stops it
-    if (m_activePptSvcIdx == svcIdx && m_pptTab->activeType() >= 0) {
+    if (isLivePpt(segIdx) && m_pptTab->activeType() >= 0) {
         m_pptTab->requestShow(-1); // stop
-        m_activePptSvcIdx = -1;
+        m_activePptSegId.clear();
         for (auto *w : m_liveExtraCards) {
             if (auto *c = qobject_cast<PptLiveCard*>(w))
                 c->setActive(false);
@@ -3484,21 +3914,21 @@ void LyricsDock::onLivePptActivate(int svcIdx)
     // Presentation takes over the screen — background is no longer ours to track
     m_currentBgPath.clear();
 
-    // Start / switch to this card
-    pptEnsureActive(m_pptTab);
-    m_activePptSvcIdx = svcIdx;
+    // Start / switch to this card: always rebind so P2 never shows P1's window
+    bindPptItem(segIdx);
+    setLivePpt(segIdx);
 
     for (auto *w : m_liveExtraCards) {
         if (auto *c = qobject_cast<PptLiveCard*>(w))
-            c->setActive(c->svcIdx() == svcIdx);
+            c->setActive(c->segIdx() == segIdx);
     }
 }
 
-void LyricsDock::onLivePptPrev(int svcIdx)
+void LyricsDock::onLivePptPrev(int segIdx)
 {
     if (!m_pptTab) return;
     // Activate without toggle-off if not already showing for this card
-    if (m_activePptSvcIdx != svcIdx || !m_pptTab->isActive()) {
+    if (!isLivePpt(segIdx) || !m_pptTab->isActive()) {
         // Stop any live media (mutual exclusion)
         if (m_liveMediaPlaying || m_liveMediaPaused) {
             lyrics_renderer_mv_clear();
@@ -3508,23 +3938,23 @@ void LyricsDock::onLivePptPrev(int svcIdx)
                     c->setPlaying(false, false);
             }
             m_liveMediaPlaying = m_liveMediaPaused = false;
-            m_liveMediaSvcIdx  = m_liveMediaFileIdx = -1;
+            clearLiveMedia();
         }
-        pptEnsureActive(m_pptTab);
-        m_activePptSvcIdx = svcIdx;
+        bindPptItem(segIdx);
+        setLivePpt(segIdx);
         for (auto *w : m_liveExtraCards) {
             if (auto *c = qobject_cast<PptLiveCard*>(w))
-                c->setActive(c->svcIdx() == svcIdx);
+                c->setActive(c->segIdx() == segIdx);
         }
     }
     pptPrev();
 }
 
-void LyricsDock::onLivePptNext(int svcIdx)
+void LyricsDock::onLivePptNext(int segIdx)
 {
     if (!m_pptTab) return;
     // Activate without toggle-off if not already showing for this card
-    if (m_activePptSvcIdx != svcIdx || !m_pptTab->isActive()) {
+    if (!isLivePpt(segIdx) || !m_pptTab->isActive()) {
         // Stop any live media (mutual exclusion)
         if (m_liveMediaPlaying || m_liveMediaPaused) {
             lyrics_renderer_mv_clear();
@@ -3534,13 +3964,13 @@ void LyricsDock::onLivePptNext(int svcIdx)
                     c->setPlaying(false, false);
             }
             m_liveMediaPlaying = m_liveMediaPaused = false;
-            m_liveMediaSvcIdx  = m_liveMediaFileIdx = -1;
+            clearLiveMedia();
         }
-        pptEnsureActive(m_pptTab);
-        m_activePptSvcIdx = svcIdx;
+        bindPptItem(segIdx);
+        setLivePpt(segIdx);
         for (auto *w : m_liveExtraCards) {
             if (auto *c = qobject_cast<PptLiveCard*>(w))
-                c->setActive(c->svcIdx() == svcIdx);
+                c->setActive(c->segIdx() == segIdx);
         }
     }
     pptNext();
@@ -3551,21 +3981,23 @@ void LyricsDock::onLivePptNext(int svcIdx)
 void LyricsDock::onParagraphsContextMenu(const QPoint &pos)
 {
     if (!m_paragraphMode) return;
-    int row = m_activeServiceIdx;
-    if (row < 0 || row >= m_serviceItems.size()) return;
-    if (m_serviceItems[row].type != ServiceItem::Type::Paragraphs) return;
+    int row = m_activeSegIdx;
+    if (row < 0 || row >= m_segments.size()) return;
+    if (m_segments[row].type != Segment::Type::Paragraphs) return;
     QMenu menu(this);
-    auto *editAct = menu.addAction("Edit slides...");
+    auto *editAct   = menu.addAction("Edit slides...");
+    auto *layoutAct = menu.addAction("Layout for this segment...");
     auto *chosen = menu.exec(m_slideArea ? m_slideArea->mapToGlobal(pos) : QCursor::pos());
-    if (chosen == editAct) showParagraphEditDialog(row);
+    if (chosen == editAct)        showParagraphEditDialog(row);
+    else if (chosen == layoutAct) showSegmentLayoutDialog(row);
 }
 
 // ── showParagraphEditDialog ───────────────────────────────────
 
-void LyricsDock::showParagraphEditDialog(int serviceIdx)
+void LyricsDock::showParagraphEditDialog(int segIdx)
 {
-    if (serviceIdx < 0 || serviceIdx >= m_serviceItems.size()) return;
-    auto &item = m_serviceItems[serviceIdx];
+    if (segIdx < 0 || segIdx >= m_segments.size()) return;
+    auto &item = m_segments[segIdx];
 
     QDialog dlg(this);
     dlg.setWindowTitle("Edit Paragraphs — " + item.title);
@@ -3611,6 +4043,12 @@ void LyricsDock::showParagraphEditDialog(int serviceIdx)
     altRow->addWidget(presetLbl);
     altRow->addWidget(presetCombo);
     altRow->addStretch();
+    auto *layoutBtn = new QPushButton("Segment layout...");
+    layoutBtn->setToolTip("This segment's own layout (font, size, margins ...). Same as the Layout button "
+                          "at the top of the slide panel. The DEFAULT for NEW paragraph segments is "
+                          "edited in the OBS source's Properties.");
+    altRow->addWidget(layoutBtn);
+    connect(layoutBtn, &QPushButton::clicked, &dlg, [this, segIdx](){ showSegmentLayoutDialog(segIdx); });
 
     auto *btnRow = new QHBoxLayout;
     auto *applyBtn  = new QPushButton("Apply");
@@ -3638,20 +4076,50 @@ void LyricsDock::showParagraphEditDialog(int serviceIdx)
     item.text              = bodyEdit->toPlainText();
     item.altSentenceColor  = altCheck->isChecked();
     item.altSentencePreset = presetCombo->currentData().toInt();
-    updateServiceListItem(serviceIdx);
+    item.syncCards();   // keep each slide card's id and background across the text edit
+    updateSegmentListItem(segIdx);
     saveServiceOrder();
 
-    if (m_activeServiceIdx == serviceIdx) {
+    if (m_activeSegIdx == segIdx) {
+        // Find the on-air card by id BEFORE the grid is rebuilt (the rebuild resets the active
+        // slide); its position may have moved if slides were added or removed above it.
+        const int onAir = onAirIndexIn(item);
         loadParagraphSlides(item);
-        // Re-push the active slide so the alt color change takes effect immediately
-        if (m_activeSlide >= 0) {
+        if (onAir >= 0 && onAir < m_slideButtons.size())
+            setActiveSlide(onAir);
+        // Re-push it so text / alternate-colour changes show immediately
+        if (onAir >= 0) {
             QStringList slides = item.parseSlides();
-            if (m_activeSlide < slides.size()) {
-                applyAltSentenceColor(item);
-                lyrics_renderer_paragraph_push(item.title, slides[m_activeSlide]);
+            if (onAir < slides.size()) {
+                applyParagraphStyle(item);
+                lyrics_renderer_paragraph_push(item.title, slides[onAir]);
             }
         }
     }
+}
+
+// ── showSegmentLayoutDialog ───────────────────────────────────
+// Per-segment paragraph layout.  Only the settings the user changes are stored on the
+// segment; everything else keeps following the global paragraph layout.
+void LyricsDock::showSegmentLayoutDialog(int segIdx)
+{
+    if (segIdx < 0 || segIdx >= m_segments.size()) return;
+    Segment &seg = m_segments[segIdx];
+    if (seg.type != Segment::Type::Paragraphs) return;
+    if (ensureParagraphLayout(seg)) saveServiceOrder();   // show the segment's own layout
+
+    QWidget *par = QApplication::activeModalWidget() ? QApplication::activeModalWidget()
+                                                     : static_cast<QWidget *>(this);
+    LayoutDialog dlg("paragraph", par);
+    dlg.setSegmentMode(seg.title, seg.layoutBytes());
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    seg.paragraphLayout = QJsonDocument::fromJson(dlg.segmentLayoutJson()).object();
+    saveServiceOrder();
+
+    // If a slide of this segment is on air, show the new layout straight away.
+    if (m_activeSegIdx == segIdx && !m_liveMode && m_activeSlide >= 0)
+        applyParagraphStyle(seg);
 }
 
 // ── buildMediaPanel ───────────────────────────────────────────
@@ -3664,18 +4132,21 @@ QWidget *LyricsDock::buildMediaPanel()
 void LyricsDock::saveServiceOrder()
 {
     QJsonObject root;
-    root["version"]     = 1;
-    root["activeIndex"] = m_activeServiceIdx;
+    root["version"]     = 2;   // 2 = segments carry ids and slide cards
+    root["activeIndex"] = m_activeSegIdx;
     QJsonArray arr;
-    for (const auto &item : m_serviceItems)
+    for (const auto &item : m_segments)
         arr.append(item.toJson());
-    root["items"] = arr;
+    root["segments"] = arr;
 
     QString path = QStandardPaths::writableLocation(
                        QStandardPaths::AppDataLocation) + "/service.json";
     QFile f(path);
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(root).toJson());
+
+    // Keep the remote's queue (the list it shows and navigates) up to date after every change.
+    if (m_wsServer) m_wsServer->broadcastServiceOrder(buildServiceOrderJson());
 }
 
 void LyricsDock::loadServiceOrder()
@@ -3696,91 +4167,117 @@ void LyricsDock::loadServiceOrder()
                     QString id = v.toString();
                     auto *song = SongManager::instance().findById(id);
                     if (!song) continue;
-                    ServiceItem si;
-                    si.type   = ServiceItem::Type::Lyrics;
-                    si.id     = id;
+                    Segment si;
+                    si.type         = Segment::Type::Lyrics;
+                    si.id           = newId();
+                    si.sourceSongId = id;
                     si.title  = song->title;
                     si.artist = song->artist;
-                    m_serviceItems << si;
-                    m_sequenceSongIds << id;
+                    si.songKey = song->key; si.songTempo = song->tempo; si.songCopyright = song->copyright;
+                    si.sections = song->sections;
+                    si.syncCards();
+                    m_segments << si;
+                    m_sequenceSongIds << si.id;
                 }
             }
         }
-        rebuildServiceList();
+        rebuildSegmentList();
         return;
     }
 
     auto doc = QJsonDocument::fromJson(f.readAll());
-    if (doc.isNull()) { rebuildServiceList(); return; }
+    f.close();
+    if (doc.isNull()) { rebuildSegmentList(); return; }
 
     const auto obj = doc.object();
-    m_serviceItems.clear();
+    m_segments.clear();
     m_sequenceSongIds.clear();
 
-    for (const auto &v : obj["items"].toArray()) {
+    bool migrated = false;   // the file was in the pre-id form; it is rewritten below
+    for (const auto &v : segmentsArray(obj)) {
         if (!v.isObject()) continue;
-        ServiceItem item = ServiceItem::fromJson(v.toObject());
-        if (item.type == ServiceItem::Type::Lyrics) {
+        Segment item = Segment::fromJson(v.toObject());
+        if (item.type == Segment::Type::Lyrics) {
             // If no sections embedded yet (old service.json), copy from library
             if (item.sections.isEmpty()) {
-                if (auto *song = SongManager::instance().findById(item.id)) {
+                if (auto *song = SongManager::instance().findById(item.sourceSongId)) {
                     item.sections = song->sections;
                     item.title    = song->title;
                     item.artist   = song->artist;
+                    item.songKey = song->key; item.songTempo = song->tempo; item.songCopyright = song->copyright;
+                    item.syncCards();
+                    migrated = true;
                 }
             }
             m_sequenceSongIds << item.id;
         }
-        m_serviceItems << item;
+        migrated = migrated || item.needsSave;
+        m_segments << item;
     }
 
-    rebuildServiceList();
+    rebuildSegmentList();
 
     int savedIdx = obj["activeIndex"].toInt(-1);
-    if (savedIdx >= 0 && savedIdx < m_serviceItems.size()) {
-        m_serviceList->setCurrentRow(savedIdx);
-        m_activeServiceIdx = savedIdx;
+    if (savedIdx >= 0 && savedIdx < m_segments.size()) {
+        m_segmentList->setCurrentRow(savedIdx);
+        m_activeSegIdx = savedIdx;
         // For Presentation items: restore the active UI state (enables buttons)
         // without touching OBS sources — sources are set up when the user interacts
         // or on the first real requestShow call.
-        if (m_pptTab && m_serviceItems[savedIdx].type == ServiceItem::Type::Presentation)
+        if (m_pptTab && m_segments[savedIdx].type == Segment::Type::Presentation) {
+            // Remember which item owns the capture and its saved window so the first
+            // real show resolves that window instead of auto-detecting.
+            const Segment &it = m_segments[savedIdx];
+            m_pptBoundSegId = it.id;
+            PptBinding b;
+            b.title = it.windowTitle; b.exe = it.windowProc;
+            b.cls = it.windowCls;     b.comMode = it.pptComMode;
+            m_pptTab->setBinding(b);
             m_pptTab->restoreActiveUi();
+        }
+    }
+
+    if (migrated) {
+        // Old file (no segment / slide-card ids yet): keep the original once, then save the
+        // new form straight away so the ids minted above are the ones every later run sees.
+        const QString bak = QFileInfo(path).absolutePath() + "/service.v1.bak.json";
+        if (!QFile::exists(bak)) QFile::copy(path, bak);
+        saveServiceOrder();
     }
 }
 
 void LyricsDock::onSequenceEditSong()
 {
-    int row = m_activeServiceIdx;
-    if (row < 0 || row >= m_serviceItems.size()) return;
-    if (m_serviceItems[row].type != ServiceItem::Type::Lyrics) return;
-    QString id = m_serviceItems[row].id;
+    int row = m_activeSegIdx;
+    if (row < 0 || row >= m_segments.size()) return;
+    if (m_segments[row].type != Segment::Type::Lyrics) return;
 
     // Build a Song from embedded sections (with library fallback)
-    Song current = songFromItem(m_serviceItems[row]);
+    Song current = songFromItem(m_segments[row]);
 
     SongEditDialog dlg(current, this);
+    dlg.setSegmentMode(true);
     if (dlg.exec() != QDialog::Accepted) return;
 
     Song res = dlg.result();
-    // Always update library so it stays in sync
-    if (dlg.savedAsNew()) {
-        SongManager::instance().addSong(res);
-    } else {
-        SongManager::instance().updateSong(res);
-    }
-    SongManager::instance().save();
+    // The segment is an independent copy: the library changes only when the user chose
+    // "Save to Library" (replace) or "Save as New Song".
+    if (dlg.savedAsNew())                   SongManager::instance().addSong(res);
+    else if (!dlg.appliedToSegmentOnly())   SongManager::instance().upsertSong(res);
 
-    // Update embedded copy in the service item
-    if (dlg.savedAsNew()) {
-        m_sequenceSongIds[m_sequenceSongIds.indexOf(id)] = res.id;
-        m_serviceItems[row].id = res.id;
-    }
-    m_serviceItems[row].title    = res.title;
-    m_serviceItems[row].artist   = res.artist;
-    m_serviceItems[row].sections = res.sections;
-    updateServiceListItem(row);
+    // Update the segment's own copy.  "Save as New Song" only changes which library song the
+    // segment points at; the segment keeps its own id.
+    if (dlg.savedAsNew()) m_segments[row].sourceSongId = res.id;
+    m_segments[row].title         = res.title;
+    m_segments[row].artist        = res.artist;
+    m_segments[row].songKey       = res.key;
+    m_segments[row].songTempo     = res.tempo;
+    m_segments[row].songCopyright = res.copyright;
+    m_segments[row].sections      = res.sections;
+    m_segments[row].syncCards();   // keep every slide card's id and background
+    updateSegmentListItem(row);
 
-    int prevActive = m_activeSlide;
+    int prevActive = onAirIndexIn(m_segments[row]);   // the on-air card, found by id
     m_currentSong = res;
     loadSongSlides(m_currentSong);
     if (prevActive >= 0 && prevActive < m_slides.size()) {
@@ -3791,44 +4288,44 @@ void LyricsDock::onSequenceEditSong()
     broadcastSequence();
 }
 
-void LyricsDock::onServiceContextMenu(const QPoint &pos)
+void LyricsDock::onSegmentContextMenu(const QPoint &pos)
 {
-    auto *item = m_serviceList->itemAt(pos);
+    auto *item = m_segmentList->itemAt(pos);
     if (!item) return;
-    int row = m_serviceList->row(item);
-    m_serviceList->setCurrentRow(row);
-    if (row < 0 || row >= m_serviceItems.size()) return;
+    int row = m_segmentList->row(item);
+    m_segmentList->setCurrentRow(row);
+    if (row < 0 || row >= m_segments.size()) return;
 
-    QMenu menu(m_serviceList);
+    QMenu menu(m_segmentList);
     auto *removeAct = menu.addAction(
         style()->standardIcon(QStyle::SP_TrashIcon), "Remove");
     QAction *editAct    = nullptr;
     QAction *renameAct  = nullptr;
-    const auto &svcItem = m_serviceItems[row];
-    if (svcItem.type == ServiceItem::Type::Lyrics)
+    const auto &seg = m_segments[row];
+    if (seg.type == Segment::Type::Lyrics)
         editAct = menu.addAction(makePenIcon(), "Edit Song");
     else
         renameAct = menu.addAction(makePenIcon(), "Rename");
 
-    auto *chosen = menu.exec(m_serviceList->viewport()->mapToGlobal(pos));
+    auto *chosen = menu.exec(m_segmentList->viewport()->mapToGlobal(pos));
     if (chosen == removeAct) {
-        onRemoveServiceItem();
+        onRemoveSegment();
     } else if (editAct && chosen == editAct) {
         onSequenceEditSong();
     } else if (renameAct && chosen == renameAct) {
         bool ok = false;
         QString newTitle = QInputDialog::getText(
-            this, "Rename Section",
+            this, "Rename Segment",
             "New name:", QLineEdit::Normal,
-            m_serviceItems[row].title, &ok);
+            m_segments[row].title, &ok);
         if (ok && !newTitle.trimmed().isEmpty()) {
-            m_serviceItems[row].title = newTitle.trimmed();
-            updateServiceListItem(row);
+            m_segments[row].title = newTitle.trimmed();
+            updateSegmentListItem(row);
             saveServiceOrder();
             broadcastSequence();
-            // Refresh panel if this section is currently loaded
-            if (row == m_activeServiceIdx && !m_liveMode)
-                loadServiceItemContent(row);
+            // Refresh panel if this segment is currently loaded
+            if (row == m_activeSegIdx && !m_liveMode)
+                loadSegmentContent(row);
         }
     }
 }
@@ -3845,18 +4342,13 @@ void LyricsDock::onSlideClicked(int index)
     if (m_paragraphMode && !m_liveMode) {
         // Paragraphs: push slide text via CTW renderer
         setActiveSlide(index);
-        if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()) {
-            const auto &item = m_serviceItems[m_activeServiceIdx];
+        if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()) {
+            const auto &item = m_segments[m_activeSegIdx];
             QStringList slides = item.parseSlides();
             if (index >= 0 && index < slides.size()) {
-                // Push assigned background if any
-                QString bgPath = item.slideBgs.value(index);
-                if (!bgPath.isEmpty() && bgPath != m_currentBgPath) {
-                    int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
-                    lyrics_renderer_media_push(bgPath, fadeMs);
-                    m_currentBgPath = bgPath;
-                }
-                applyAltSentenceColor(item);
+                // Card's own background, else the segment default (blank clears)
+                showBackground(item.backgroundFor(index));
+                applyParagraphStyle(item);
                 lyrics_renderer_paragraph_push(item.title, slides[index]);
                 if (m_wsServer) m_wsServer->broadcastScripture(item.title, slides[index]);
                 if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
@@ -3872,10 +4364,10 @@ void LyricsDock::onSlideClicked(int index)
             // For video: must clear now to stop playback.
             // For image: keep it — the slide's bg push will replace it (no black flash).
             bool wasVideo = false;
-            if (m_liveMediaSvcIdx >= 0 && m_liveMediaSvcIdx < m_serviceItems.size()) {
-                const QString &p = m_serviceItems[m_liveMediaSvcIdx].mediaPaths.value(m_liveMediaFileIdx);
+            {
+                const QString p = liveMediaPath();   // looked up by id
                 wasVideo = isVideoFile(p);
-                if (!wasVideo && m_currentBgPath.isEmpty())
+                if (!wasVideo && !p.isEmpty() && m_currentBgPath.isEmpty())
                     m_currentBgPath = p; // let bg block compare against this image
             }
             if (wasVideo)
@@ -3885,14 +4377,13 @@ void LyricsDock::onSlideClicked(int index)
                     c->setPlaying(false, false);
             m_liveMediaPlaying = false;
             m_liveMediaPaused  = false;
-            m_liveMediaSvcIdx  = -1;
-            m_liveMediaFileIdx = -1;
+            clearLiveMedia();
         }
 
         // Clicking a lyrics/paragraph slide stops any active presentation
         if (m_pptTab && m_pptTab->activeType() >= 0) {
             m_pptTab->requestShow(-1);
-            m_activePptSvcIdx = -1;
+            m_activePptSegId.clear();
             for (auto *w : m_liveExtraCards) {
                 if (auto *c = qobject_cast<PptLiveCard*>(w))
                     c->setActive(false);
@@ -3901,12 +4392,12 @@ void LyricsDock::onSlideClicked(int index)
 
         // In live mode, index is a flat global index across all items
         setActiveSlide(index);  // highlight button
-        // Find which service item + slide this index corresponds to
+        // Find which segment + slide this index corresponds to
         int globalIdx = 0;
-        for (int svcIdx = 0; svcIdx < m_serviceItems.size(); ++svcIdx) {
-            const auto &svcItem = m_serviceItems[svcIdx];
-            if (svcItem.type == ServiceItem::Type::Lyrics) {
-                Song song = songFromItem(svcItem);
+        for (int segIdx = 0; segIdx < m_segments.size(); ++segIdx) {
+            const auto &seg = m_segments[segIdx];
+            if (seg.type == Segment::Type::Lyrics) {
+                Song song = songFromItem(seg);
                 const auto allSlides = song.allSlides();
                 if (!allSlides.isEmpty() && index < globalIdx + allSlides.size()) {
                     int localIdx = index - globalIdx;
@@ -3915,10 +4406,10 @@ void LyricsDock::onSlideClicked(int index)
                     m_slides = allSlides;
 
                     // Apply section color preset to OBS before pushing
-                    if (svcItem.colorPresetIdx >= 0 && svcItem.colorPresetIdx < 6
-                            && m_colorBtn[svcItem.colorPresetIdx]) {
-                        QColor fc = m_colorBtn[svcItem.colorPresetIdx]->fontColor();
-                        QColor oc = m_colorBtn[svcItem.colorPresetIdx]->outlineColor();
+                    if (seg.colorPresetIdx >= 0 && seg.colorPresetIdx < 6
+                            && m_colorBtn[seg.colorPresetIdx]) {
+                        QColor fc = m_colorBtn[seg.colorPresetIdx]->fontColor();
+                        QColor oc = m_colorBtn[seg.colorPresetIdx]->outlineColor();
                         uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() <<  8) | (uint32_t)fc.red();
                         uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() <<  8) | (uint32_t)oc.red();
                         lyrics_renderer_set_text_color(fcObs, ocObs);
@@ -3931,13 +4422,7 @@ void LyricsDock::onSlideClicked(int index)
                         QString newBg;
                         for (auto *btn : m_slideButtons)
                             if (btn->slideIndex() == index) { newBg = btn->backgroundPath(); break; }
-                        int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
-                        if (newBg.isEmpty()) {
-                            if (!m_currentBgPath.isEmpty()) { lyrics_renderer_media_clear(fadeMs); m_currentBgPath.clear(); }
-                        } else if (newBg != m_currentBgPath) {
-                            lyrics_renderer_media_push(newBg, fadeMs);
-                            m_currentBgPath = newBg;
-                        }
+                        showBackground(newBg);   // same rules as every other slide change
                     }
 
                     // Push slide content using local index into m_slides[]
@@ -3947,22 +4432,30 @@ void LyricsDock::onSlideClicked(int index)
                     else
                         lyrics_renderer_push(sl.text, sl.section, m_currentSong.title);
                     m_activeSlide = localIdx;
+                    rememberOnAir(seg, localIdx);
 
-                    if (m_wsServer) m_wsServer->broadcastSlide(sl.text, sl.section, m_currentSong.title, index);
+                    // The remote numbers lyric slides across SONGS only (see buildSequenceJson), while
+                    // `index` counts every segment's slides in the live grid.  Send the remote's numbering
+                    // so its highlight follows when paragraph segments precede the song.
+                    {
+                        const int seqRow = m_sequenceSongIds.indexOf(seg.id);
+                        const int remoteIdx = (seqRow >= 0 ? computeGlobalSlideOffset(seqRow) : globalIdx) + localIdx;
+                        if (m_wsServer) m_wsServer->broadcastSlide(sl.text, sl.section, m_currentSong.title, remoteIdx);
+                    }
                     if (m_wsServer) m_wsServer->broadcastActiveMode("lyr");
                     return;
                 }
                 globalIdx += allSlides.size();
-            } else if (svcItem.type == ServiceItem::Type::Paragraphs) {
-                QStringList slides = svcItem.parseSlides();
+            } else if (seg.type == Segment::Type::Paragraphs) {
+                QStringList slides = seg.parseSlides();
                 if (index < globalIdx + slides.size()) {
                     int localIdx = index - globalIdx;
 
                     // Apply section color preset to OBS before pushing
-                    if (svcItem.colorPresetIdx >= 0 && svcItem.colorPresetIdx < 6
-                            && m_colorBtn[svcItem.colorPresetIdx]) {
-                        QColor fc = m_colorBtn[svcItem.colorPresetIdx]->fontColor();
-                        QColor oc = m_colorBtn[svcItem.colorPresetIdx]->outlineColor();
+                    if (seg.colorPresetIdx >= 0 && seg.colorPresetIdx < 6
+                            && m_colorBtn[seg.colorPresetIdx]) {
+                        QColor fc = m_colorBtn[seg.colorPresetIdx]->fontColor();
+                        QColor oc = m_colorBtn[seg.colorPresetIdx]->outlineColor();
                         uint32_t fcObs = ((uint32_t)fc.blue()  << 16) | ((uint32_t)fc.green() <<  8) | (uint32_t)fc.red();
                         uint32_t ocObs = ((uint32_t)oc.blue()  << 16) | ((uint32_t)oc.green() <<  8) | (uint32_t)oc.red();
                         lyrics_renderer_set_paragraph_text_color(fcObs, ocObs);
@@ -3974,34 +4467,29 @@ void LyricsDock::onSlideClicked(int index)
                         QString newBg;
                         for (auto *btn : m_slideButtons)
                             if (btn->slideIndex() == index) { newBg = btn->backgroundPath(); break; }
-                        int fadeMs = m_sharedGallery ? m_sharedGallery->fadeDurationMs() : 500;
-                        if (newBg.isEmpty()) {
-                            if (!m_currentBgPath.isEmpty()) { lyrics_renderer_media_clear(fadeMs); m_currentBgPath.clear(); }
-                        } else if (newBg != m_currentBgPath) {
-                            lyrics_renderer_media_push(newBg, fadeMs);
-                            m_currentBgPath = newBg;
-                        }
+                        showBackground(newBg);   // same rules as every other slide change
                     }
 
-                    applyAltSentenceColor(svcItem);
-                    lyrics_renderer_paragraph_push(svcItem.title, slides[localIdx]);
-                    if (m_wsServer) m_wsServer->broadcastScripture(svcItem.title, slides[localIdx]);
+                    applyParagraphStyle(seg);
+                    rememberOnAir(seg, localIdx);
+                    lyrics_renderer_paragraph_push(seg.title, slides[localIdx]);
+                    if (m_wsServer) m_wsServer->broadcastScripture(seg.title, slides[localIdx]);
                     if (m_wsServer) m_wsServer->broadcastActiveMode("paragraph");
                     return;
                 }
                 globalIdx += slides.size();
-            } else if (svcItem.type == ServiceItem::Type::Media) {
-                if (svcItem.mediaPaths.isEmpty()) {
+            } else if (seg.type == Segment::Type::Media) {
+                if (seg.mediaPaths.isEmpty()) {
                     // Placeholder SlideButton was created — consumes one globalIdx slot
                     if (index == globalIdx) {
-                        if (m_serviceList) m_serviceList->setCurrentRow(svcIdx);
+                        if (m_segmentList) m_segmentList->setCurrentRow(segIdx);
                         onLiveToggled(false);
                         return;
                     }
                     ++globalIdx;
                 }
                 // Media with actual paths: MediaSlideCards used, no globalIdx slot consumed
-            } else if (svcItem.type == ServiceItem::Type::Presentation) {
+            } else if (seg.type == Segment::Type::Presentation) {
                 // PptLiveCard used — no globalIdx slot consumed
             }
         }
@@ -4017,41 +4505,38 @@ void LyricsDock::onSlideClicked(int index)
 void LyricsDock::onSlideEditRequested(int sectionIndex)
 {
     if (m_paragraphMode) {
-        showParagraphEditDialog(m_activeServiceIdx);
+        showParagraphEditDialog(m_activeSegIdx);
         return;
     }
     if (m_currentSong.id.isEmpty()) return;
-    QString oldId = m_currentSong.id;
 
     SongEditDialog dlg(m_currentSong, this, sectionIndex);
+    dlg.setSegmentMode(true);
     if (dlg.exec() != QDialog::Accepted) return;
 
     Song res = dlg.result();
-    // Update library
-    if (dlg.savedAsNew()) {
-        SongManager::instance().addSong(res);
-    } else {
-        SongManager::instance().updateSong(res);
-    }
-    SongManager::instance().save();
+    // The segment is an independent copy: the library changes only when the user chose
+    // "Save to Library" (replace) or "Save as New Song".
+    if (dlg.savedAsNew())                   SongManager::instance().addSong(res);
+    else if (!dlg.appliedToSegmentOnly())   SongManager::instance().upsertSong(res);
 
-    // Update embedded sections in every service instance of this song
-    for (int i = 0; i < m_serviceItems.size(); ++i) {
-        if (m_serviceItems[i].type != ServiceItem::Type::Lyrics) continue;
-        if (m_serviceItems[i].id != oldId && m_serviceItems[i].id != res.id) continue;
-        if (dlg.savedAsNew()) m_serviceItems[i].id = res.id;
-        m_serviceItems[i].title    = res.title;
-        m_serviceItems[i].artist   = res.artist;
-        m_serviceItems[i].sections = res.sections;
-        updateServiceListItem(i);
-    }
-    if (dlg.savedAsNew()) {
-        m_sequenceSongIds.clear();
-        for (const auto &si : m_serviceItems)
-            if (si.type == ServiceItem::Type::Lyrics) m_sequenceSongIds << si.id;
+    // Update the active segment only (other segments keep their own copy)
+    for (int i = 0; i < m_segments.size(); ++i) {
+        if (i != m_activeSegIdx) continue;
+        if (m_segments[i].type != Segment::Type::Lyrics) continue;
+        if (dlg.savedAsNew()) m_segments[i].sourceSongId = res.id;
+        m_segments[i].title         = res.title;
+        m_segments[i].artist        = res.artist;
+        m_segments[i].songKey       = res.key;
+        m_segments[i].songTempo     = res.tempo;
+        m_segments[i].songCopyright = res.copyright;
+        m_segments[i].sections      = res.sections;
+        m_segments[i].syncCards();   // keep every slide card's id and background
+        updateSegmentListItem(i);
     }
 
-    int prevActive = m_activeSlide;
+    int prevActive = (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+                         ? onAirIndexIn(m_segments[m_activeSegIdx]) : -1;   // found by id
     m_currentSong = res;
     loadSongSlides(m_currentSong);
     if (prevActive >= 0 && prevActive < m_slides.size()) {
@@ -4067,8 +4552,8 @@ void LyricsDock::updateEditSlidePanel()
     if (!m_editSlideText || !m_editSlideApplyBtn || !m_editSlideHdr) return;
 
     bool hasParagraph = m_paragraphMode && !m_liveMode
-                        && m_activeServiceIdx >= 0
-                        && m_activeServiceIdx < m_serviceItems.size()
+                        && m_activeSegIdx >= 0
+                        && m_activeSegIdx < m_segments.size()
                         && m_activeSlide >= 0;
     bool hasLyrics = !m_paragraphMode && !m_liveMode
                      && !m_currentSong.id.isEmpty()
@@ -4076,7 +4561,7 @@ void LyricsDock::updateEditSlidePanel()
                      && m_activeSlide < m_slides.size();
 
     if (hasParagraph) {
-        const auto &item = m_serviceItems[m_activeServiceIdx];
+        const auto &item = m_segments[m_activeSegIdx];
         QStringList slides = item.parseSlides();
         if (m_activeSlide < slides.size()) {
             m_editSlideHdr->setText(
@@ -4111,23 +4596,28 @@ void LyricsDock::onEditSlideApply()
     if (!m_editSlideText) return;
     QString newText = m_editSlideText->toPlainText();
 
-    if (m_paragraphMode && m_activeServiceIdx >= 0
-            && m_activeServiceIdx < m_serviceItems.size()) {
-        auto &item = m_serviceItems[m_activeServiceIdx];
+    if (m_paragraphMode && m_activeSegIdx >= 0
+            && m_activeSegIdx < m_segments.size()) {
+        auto &item = m_segments[m_activeSegIdx];
         QStringList slides = item.parseSlides();
         if (m_activeSlide >= 0 && m_activeSlide < slides.size()) {
             slides[m_activeSlide] = newText.trimmed();
             item.text = slides.join("\n\n\n");
+            item.syncCards();   // the edited card keeps its id and background
             saveServiceOrder();
-            int saved = m_activeSlide;
+            int saved = onAirIndexIn(item);   // by id
             loadParagraphSlides(item);
             if (saved >= 0 && saved < m_slideButtons.size())
                 setActiveSlide(saved);
-            // Push the updated slide live
-            if (!newText.trimmed().isEmpty()) {
-                applyAltSentenceColor(item);
-                lyrics_renderer_paragraph_push(item.title, newText.trimmed());
-                if (m_wsServer) m_wsServer->broadcastScripture(item.title, newText.trimmed());
+            // Push what that card NOW contains, not the raw text that was typed.  The edit may
+            // have split it into several slides (two blank lines start a new slide): the on-air
+            // card is then only the FIRST part, exactly what its slide card shows.  If the
+            // edit deleted the card (saved < 0) nothing is pushed.
+            const QStringList nowSlides = item.parseSlides();
+            if (saved >= 0 && saved < nowSlides.size()) {
+                applyParagraphStyle(item);
+                lyrics_renderer_paragraph_push(item.title, nowSlides[saved]);
+                if (m_wsServer) m_wsServer->broadcastScripture(item.title, nowSlides[saved]);
             }
         }
         return;
@@ -4154,18 +4644,16 @@ void LyricsDock::onEditSlideApply()
         secSlides[localIdx] = newText.trimmed();
         sec.text = secSlides.join("\n\n");
 
-        // Update library and embedded copy in service
-        SongManager::instance().updateSong(m_currentSong);
-        SongManager::instance().save();
-        for (int i = 0; i < m_serviceItems.size(); ++i) {
-            if (m_serviceItems[i].type == ServiceItem::Type::Lyrics
-                    && m_serviceItems[i].id == m_currentSong.id) {
-                m_serviceItems[i].sections = m_currentSong.sections;
-            }
+        // Edit the active segment's own copy; the song library is not touched.
+        if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()
+                && m_segments[m_activeSegIdx].type == Segment::Type::Lyrics) {
+            m_segments[m_activeSegIdx].sections = m_currentSong.sections;
+            m_segments[m_activeSegIdx].syncCards();   // the edited card keeps its id and background
         }
         saveServiceOrder();
 
-        int saved = m_activeSlide;
+        int saved = (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size())
+                        ? onAirIndexIn(m_segments[m_activeSegIdx]) : m_activeSlide;   // by id
         loadSongSlides(m_currentSong);
         if (saved >= 0 && saved < m_slides.size()) {
             setActiveSlide(saved);
@@ -4189,8 +4677,8 @@ void LyricsDock::onExportService()
         f.write(QJsonDocument(root).toJson());
         f.close();
         QMessageBox::information(this, "Export Complete",
-            QString("Exported %1 item(s) to:\n%2")
-                .arg(root["items"].toArray().size()).arg(path));
+            QString("Exported %1 segment(s) to:\n%2")
+                .arg(segmentsArray(root).size()).arg(path));
     } else {
         QMessageBox::warning(this, "Export Failed", "Could not write file:\n" + path);
     }
@@ -4218,9 +4706,9 @@ void LyricsDock::onImportService()
 
     const QJsonObject root = doc.object();
 
-    // Count usable service items
+    // Count usable segments
     int itemCount = 0;
-    for (const auto &v : root["items"].toArray()) {
+    for (const auto &v : segmentsArray(root)) {
         if (!v.isObject()) continue;
         const QString t = v.toObject()["type"].toString();
         if (t == "song" || t == "paragraphs" || t == "paragraph" || t == "scripture" || t == "media")
@@ -4238,7 +4726,7 @@ void LyricsDock::onImportService()
 
     // Build summary string
     QStringList summary;
-    summary << QString("%1 service item(s)").arg(itemCount);
+    summary << QString("%1 segment(s)").arg(itemCount);
     if (hasGallery)  summary << QString("%1 graphics image(s)").arg(root["gallery"].toArray().size());
     if (hasAudio)    summary << QString("%1 audio file(s)").arg(root["audioBin"].toArray().size());
     if (hasPresets)  summary << "color presets";
@@ -4254,7 +4742,7 @@ void LyricsDock::onImportService()
     msgBox.setText("This file contains: " + summary.join(", ") + ".\n\nHow would you like to import it?");
     msgBox.setInformativeText(
         replaceNote + "\n\n"
-        "Keep My Layout: replaces the service items only; your current font, colors, gallery and audio are unchanged.");
+        "Keep My Layout: replaces the segments only; your current font, colors, gallery and audio are unchanged.");
 
     QPushButton *replaceAllBtn  = msgBox.addButton("Replace All",    QMessageBox::AcceptRole);
     QPushButton *keepLayoutBtn  = msgBox.addButton("Keep My Layout", QMessageBox::ActionRole);
@@ -4288,38 +4776,42 @@ void LyricsDock::onImportFromWeb()
     auto doc = QJsonDocument::fromJson(f.readAll());
     f.close();
 
-    // Try service.json format first (array of service items)
-    if (doc.isObject() && doc.object().contains("items")) {
+    // Try service.json format first (array of segments)
+    if (doc.isObject() && (doc.object().contains("segments") || doc.object().contains("items"))) {
         // Full service.json: replace entire service order
         const auto obj = doc.object();
-        m_serviceItems.clear();
+        m_segments.clear();
         m_sequenceSongIds.clear();
-        for (const auto &v : obj["items"].toArray()) {
+        for (const auto &v : segmentsArray(obj)) {
             if (!v.isObject()) continue;
-            ServiceItem item = ServiceItem::fromJson(v.toObject());
-            if (item.type == ServiceItem::Type::Lyrics) {
-                auto *existing = SongManager::instance().findById(item.id);
+            Segment item = Segment::fromJson(v.toObject());
+            item.remintIds();   // an import always gets new segment and slide-card ids
+            if (item.type == Segment::Type::Lyrics) {
+                auto *existing = SongManager::instance().findById(item.sourceSongId);
                 if (!existing) {
                     // Song not in library — add it from embedded sections
-                    Song s; s.id = item.id; s.title = item.title;
+                    Song s; s.id = item.sourceSongId; s.title = item.title;
                     s.artist = item.artist; s.sections = item.sections;
+                    s.key = item.songKey; s.tempo = item.songTempo; s.copyright = item.songCopyright;
                     SongManager::instance().addSong(s);
                 } else if (item.sections.isEmpty()) {
                     // Old service file with no embedded sections — populate now
                     item.sections = existing->sections;
                     item.title    = existing->title;
                     item.artist   = existing->artist;
+                    item.songKey = existing->key; item.songTempo = existing->tempo; item.songCopyright = existing->copyright;
+                    item.syncCards();
                 }
                 m_sequenceSongIds << item.id;
             }
-            m_serviceItems << item;
+            m_segments << item;
         }
         SongManager::instance().save();
-        rebuildServiceList();
+        rebuildSegmentList();
         saveServiceOrder();
         broadcastSequence();
         QMessageBox::information(this, "Import Complete",
-            QString("Service loaded: %1 items.").arg(m_serviceItems.size()));
+            QString("Service loaded: %1 items.").arg(m_segments.size()));
         return;
     }
 
@@ -4338,15 +4830,21 @@ void LyricsDock::onImportFromWeb()
         if (s.id.isEmpty()) s.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         if (mgr.findById(s.id)) { mgr.updateSong(s); ++updated; }
         else                     { mgr.addSong(s);    ++added; }
-        if (!m_sequenceSongIds.contains(s.id)) {
-            ServiceItem si; si.type = ServiceItem::Type::Lyrics;
-            si.id = s.id; si.title = s.title; si.artist = s.artist;
+        bool inService = false;
+        for (const auto &seg : m_segments)
+            if (seg.type == Segment::Type::Lyrics && songIdOf(seg) == s.id) { inService = true; break; }
+        if (!inService) {
+            Segment si; si.type = Segment::Type::Lyrics;
+            si.id = newId(); si.sourceSongId = s.id;
+            si.title = s.title; si.artist = s.artist;
+            si.songKey = s.key; si.songTempo = s.tempo; si.songCopyright = s.copyright;
             si.sections = s.sections;  // embed full lyrics
-            m_serviceItems << si; m_sequenceSongIds << s.id;
+            si.syncCards();
+            m_segments << si; m_sequenceSongIds << si.id;
         }
     }
     mgr.save();
-    rebuildServiceList();
+    rebuildSegmentList();
     saveServiceOrder();
     broadcastSequence();
     QMessageBox::information(this, "Import Complete",
@@ -4357,14 +4855,47 @@ void LyricsDock::onBlackoutClicked()
 {
     for (auto *b : m_slideButtons) b->setActive(false);
     m_activeSlide = -1;
+    m_onAirSegId.clear();
+    m_onAirCardId.clear();
+    publishOnAir();
     applyZoomToAll();
     updateSlideCounter();
     lyrics_renderer_clear();
     if (m_wsServer) m_wsServer->broadcastClear();
 }
 
-void LyricsDock::applyAltSentenceColor(const ServiceItem &item)
+void LyricsDock::applySegmentPreset(const Segment &seg)
 {
+    if (seg.colorPresetIdx < 0 || seg.colorPresetIdx >= 6 || !m_colorBtn[seg.colorPresetIdx]) return;
+    const QColor fc = m_colorBtn[seg.colorPresetIdx]->fontColor();
+    const QColor oc = m_colorBtn[seg.colorPresetIdx]->outlineColor();
+    const uint32_t fcObs = ((uint32_t)fc.blue() << 16) | ((uint32_t)fc.green() << 8) | (uint32_t)fc.red();
+    const uint32_t ocObs = ((uint32_t)oc.blue() << 16) | ((uint32_t)oc.green() << 8) | (uint32_t)oc.red();
+    if (seg.type == Segment::Type::Lyrics) {
+        lyrics_renderer_set_text_color(fcObs, ocObs, false);
+        lyrics_renderer_set_chinese_color(fcObs, ocObs, false);
+    } else if (seg.type == Segment::Type::Paragraphs) {
+        lyrics_renderer_set_paragraph_text_color(fcObs, ocObs, false);
+    }
+}
+
+void LyricsDock::applyParagraphStyle(const Segment &item)
+{
+    applySegmentPreset(item);   // this segment's colour preset, for the push that follows
+
+    // This segment's own complete layout (taken from the default when it was created)
+    QByteArray layout;
+    if (item.type == Segment::Type::Paragraphs) {
+        const int i = segmentIndexById(item.id);
+        if (i >= 0) {
+            if (ensureParagraphLayout(m_segments[i])) saveServiceOrder();
+            layout = m_segments[i].layoutBytes();
+        } else {
+            layout = item.layoutBytes();
+        }
+    }
+    lyrics_renderer_set_paragraph_layout(layout);
+
     if (!item.altSentenceColor || item.altSentencePreset < 0
         || item.altSentencePreset >= 6 || !m_colorBtn[item.altSentencePreset]) {
         lyrics_renderer_set_alt_sentence_color(false, 0, 0);
@@ -4396,11 +4927,11 @@ void LyricsDock::onColorPresetApplied(QColor fontColor, QColor outlineColor)
     for (auto *btn : m_slideButtons)
         btn->setFontColor(fontColor);
 
-    // Save preset index to current service item so it restores on next visit.
+    // Save preset index to current segment so it restores on next visit.
     // m_activeColorPresetIdx is set by the connection lambda before calling here.
-    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()
+    if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()
         && m_activeColorPresetIdx >= 0) {
-        m_serviceItems[m_activeServiceIdx].colorPresetIdx = m_activeColorPresetIdx;
+        m_segments[m_activeSegIdx].colorPresetIdx = m_activeColorPresetIdx;
         saveServiceOrder();
     }
 
@@ -4445,16 +4976,16 @@ void LyricsDock::applyColorPresetFromRemote(int idx)
 
 void LyricsDock::onNextSlide()
 {
-    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()) {
-        const auto &item = m_serviceItems[m_activeServiceIdx];
-        if (item.type == ServiceItem::Type::Paragraphs) {
+    if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()) {
+        const auto &item = m_segments[m_activeSegIdx];
+        if (item.type == Segment::Type::Paragraphs) {
             if (!m_slides.isEmpty()) {
                 int next = (m_activeSlide < 0) ? 0 : m_activeSlide + 1;
                 if (next < m_slides.size()) { setActiveSlide(next); pushCurrentSlide(); }
             }
             return;
         }
-        if (item.type != ServiceItem::Type::Lyrics) return;
+        if (item.type != Segment::Type::Lyrics) return;
     }
     if (m_slides.isEmpty()) return;
     int next = (m_activeSlide < 0) ? 0 : m_activeSlide + 1;
@@ -4465,13 +4996,13 @@ void LyricsDock::onNextSlide()
 
 void LyricsDock::onPrevSlide()
 {
-    if (m_activeServiceIdx >= 0 && m_activeServiceIdx < m_serviceItems.size()) {
-        const auto &item = m_serviceItems[m_activeServiceIdx];
-        if (item.type == ServiceItem::Type::Paragraphs) {
+    if (m_activeSegIdx >= 0 && m_activeSegIdx < m_segments.size()) {
+        const auto &item = m_segments[m_activeSegIdx];
+        if (item.type == Segment::Type::Paragraphs) {
             if (m_activeSlide > 0) { setActiveSlide(m_activeSlide - 1); pushCurrentSlide(); }
             return;
         }
-        if (item.type != ServiceItem::Type::Lyrics) return;
+        if (item.type != Segment::Type::Lyrics) return;
     }
     if (m_slides.isEmpty() || m_activeSlide <= 0) return;
     setActiveSlide(m_activeSlide - 1);
@@ -4484,72 +5015,42 @@ void LyricsDock::activatePrevSlide()  { onPrevSlide(); }
 
 void LyricsDock::lpNextSlide(const QString &mode)
 {
-    if (mode == "paragraph" || mode == "scr") {
-        onNextSlide();
-    } else if (mode == "ppt") {
+    // A presentation on air owns Next/Previous: they drive the presentation and never move on to
+    // the next segment (the operator selects the next segment by hand).
+    if (mode == "ppt" || (m_pptTab && m_pptTab->activeType() >= 0)) {
         if (m_pptTab && m_pptTab->activeType() < 0)
-            m_pptTab->requestShow(0); // auto-activate if not yet showing
+            m_pptTab->requestShow(0);   // auto-activate if not yet showing
         pptNext();
-    } else {
-        if (m_liveMode) {
-            // In live mode m_slides is empty; navigate via global slide button index.
-            int numButtons = m_slideButtons.size();
-            if (numButtons == 0) return;
-            // Current global index = song offset + local active slide index.
-            int curGlobal = m_currentSongSlideOffset + (m_activeSlide >= 0 ? m_activeSlide : -1);
-            int nextGlobal = curGlobal + 1;
-            if (nextGlobal < 0) nextGlobal = 0;
-            if (nextGlobal >= numButtons) return;
-            onSlideClicked(nextGlobal);
-        } else {
-            if (m_slides.isEmpty()) return;
-            int next = (m_activeSlide < 0) ? 0 : m_activeSlide + 1;
-            if (next >= m_slides.size()) return;
-            setActiveSlide(next);
-            pushCurrentSlide();
-        }
-        if (m_wsServer) m_wsServer->broadcastActiveMode("lyr");
+        return;
     }
+    navigateQueue(+1);
 }
 
 void LyricsDock::lpPrevSlide(const QString &mode)
 {
-    if (mode == "paragraph" || mode == "scr") {
-        onPrevSlide();
-    } else if (mode == "ppt") {
+    if (mode == "ppt" || (m_pptTab && m_pptTab->activeType() >= 0)) {
         if (m_pptTab && m_pptTab->activeType() < 0)
-            m_pptTab->requestShow(0); // auto-activate if not yet showing
+            m_pptTab->requestShow(0);
         pptPrev();
-    } else {
-        if (m_liveMode) {
-            // In live mode m_slides is empty; navigate via global slide button index.
-            int curGlobal = m_currentSongSlideOffset + (m_activeSlide >= 0 ? m_activeSlide : 0);
-            int prevGlobal = curGlobal - 1;
-            if (prevGlobal < 0) return;
-            onSlideClicked(prevGlobal);
-        } else {
-            if (m_slides.isEmpty() || m_activeSlide <= 0) return;
-            setActiveSlide(m_activeSlide - 1);
-            pushCurrentSlide();
-        }
-        if (m_wsServer) m_wsServer->broadcastActiveMode("lyr");
+        return;
     }
+    navigateQueue(-1);
 }
 
 void LyricsDock::activateNextSong()
 {
-    if (!m_serviceList) return;
-    int row = m_serviceList->currentRow();
-    if (row < m_serviceList->count() - 1)
-        m_serviceList->setCurrentRow(row + 1);
+    if (!m_segmentList) return;
+    int row = m_segmentList->currentRow();
+    if (row < m_segmentList->count() - 1)
+        m_segmentList->setCurrentRow(row + 1);
 }
 
 void LyricsDock::activatePrevSong()
 {
-    if (!m_serviceList) return;
-    int row = m_serviceList->currentRow();
+    if (!m_segmentList) return;
+    int row = m_segmentList->currentRow();
     if (row > 0)
-        m_serviceList->setCurrentRow(row - 1);
+        m_segmentList->setCurrentRow(row - 1);
 }
 
 void LyricsDock::activateGalleryMedia(int oneBased)

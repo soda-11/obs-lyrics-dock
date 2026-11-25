@@ -63,6 +63,8 @@ static QString s_scripTitle;
 static QString s_scripText;
 
 // Alternate sentence color: even-numbered real lines use a different color preset.
+// Per-segment paragraph layout overrides (JSON object); empty = global layout only.
+static QByteArray s_paragraphLayoutJson;
 static bool     s_altSentenceEnabled  = false;
 static uint32_t s_altFontColor        = 0x00FFFFFFu; // OBS COLORREF: 0x00BBGGRR
 static uint32_t s_altOutlineColor     = 0x00000000u;
@@ -338,6 +340,8 @@ static std::pair<QString,QString> splitAltLines(const QString &text)
     return { odd.join('\n'), even.join('\n') };
 }
 
+static void src_defaults(obs_data_t *s);   // defined below; used to complete a merged copy
+
 // isParagraph=true → use ctw_title_/ctw_text_ prefixes and CTW layout values.
 // isParagraph=false (default) → use scr_title_/scr_text_ and Scripture layout values.
 static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
@@ -346,9 +350,30 @@ static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
 {
     const char *titlePfx = isParagraph ? "paragraph_title_" : "scr_title_";
     const char *textPfx  = isParagraph ? "paragraph_text_"  : "scr_text_";
+    // A paragraph segment may override part of the global paragraph layout.  The overrides are
+    // merged over the global settings into a temporary copy; the global settings themselves are
+    // never modified.
+    obs_data_t *eff = nullptr;
+    if (isParagraph && !s_paragraphLayoutJson.isEmpty()) {
+        eff = obs_data_create_from_json(obs_data_get_json(s));
+        if (eff) {
+            src_defaults(eff);
+            if (obs_data_t *ov = obs_data_create_from_json(s_paragraphLayoutJson.constData())) {
+                obs_data_apply(eff, ov);
+                obs_data_release(ov);
+            }
+            s = eff;   // from here on read the merged settings
+        }
+    }
     int titleH  = isParagraph ? inst->paragraphTitleH  : inst->scripTitleH;
     int hMargin = isParagraph ? inst->paragraphHMargin : inst->scripHMargin;
-    int textY   = isParagraph ? (titleH + inst->paragraphTextY) : titleH;
+    int textOffset = inst->paragraphTextY;
+    if (eff) {
+        titleH     = (int)obs_data_get_int(eff, "paragraph_title_h");
+        hMargin    = (int)obs_data_get_int(eff, "paragraph_h_margin");
+        textOffset = (int)obs_data_get_int(eff, "paragraph_text_y");
+    }
+    int textY   = isParagraph ? (titleH + textOffset) : titleH;
     int textW   = qMax(64, inst->canvasW - 2 * hMargin);
     pushTextChild(inst->srcScripTitle, s, titlePfx, title, textW, titleH);
 
@@ -373,6 +398,7 @@ static void updateScriptureChildren(LyricsInstance *inst, obs_data_t *s,
 
     inst->activeHMargin = hMargin;
     inst->activeTextY   = textY;
+    if (eff) obs_data_release(eff);
 }
 
 // ── Chinese slide child push ──────────────────────────────────────────────────
@@ -931,9 +957,9 @@ static obs_properties_t *src_props(void *)
     obs_properties_add_int(cgrp,"bottom_bar_h",         "Lyrics: bottom bar height (px)",      10, 400,1);
     obs_properties_add_int(cgrp,"lyrics_top_padding",    "Lyrics: top padding (px)",            0, 1080,1);
     obs_properties_add_int(cgrp,"lyrics_bottom_padding", "Lyrics: bottom padding (px)",         0, 1080,1);
-    obs_properties_add_int(cgrp,"paragraph_title_h",  "Paragraph: title strip height (px)",  10, 400,1);
-    obs_properties_add_int(cgrp,"paragraph_h_margin", "Paragraph: left/right margin (px)",   0, 400,1);
-    obs_properties_add_int(cgrp,"paragraph_text_y",   "Paragraph: body text top offset (px)", 0,1080,1);
+    obs_properties_add_int(cgrp,"paragraph_title_h",  "Paragraph DEFAULT: title strip height (px)",  10, 400,1);
+    obs_properties_add_int(cgrp,"paragraph_h_margin", "Paragraph DEFAULT: left/right margin (px)",   0, 400,1);
+    obs_properties_add_int(cgrp,"paragraph_text_y",   "Paragraph DEFAULT: body text top offset (px)", 0,1080,1);
 
     // ── Chinese interleave layout sub-group ──────────────────────────────────
     obs_properties_t *chgrp = obs_properties_create();
@@ -973,8 +999,8 @@ static obs_properties_t *src_props(void *)
     addBoxGroup(props,"lyrics_", "1.  English Lyrics — Main Text");
     addBoxGroup(props,"section_","2.  Lyrics — Section Label  (bottom-left)");
     addBoxGroup(props,"title_",  "3.  Lyrics — Song Title  (bottom-right)");
-    addBoxGroup(props,"paragraph_title_","4.  Paragraph — Title  (top strip)");
-    addBoxGroup(props,"paragraph_text_", "5.  Paragraph — Text  (main area)");
+    addBoxGroup(props,"paragraph_title_","4.  Paragraph — Title  (top strip)  [DEFAULT for NEW paragraph segments]");
+    addBoxGroup(props,"paragraph_text_", "5.  Paragraph — Text  (main area)  [DEFAULT for NEW paragraph segments]");
     addBoxGroup(props,"ch_pinyin_", "6.  Chinese — Pinyin  (top strip)");
     addBoxGroup(props,"ch_chinese_","7.  Chinese — Characters  (middle)");
     addBoxGroup(props,"ch_english_","8.  Chinese — English Translation  (bottom)");
@@ -1437,6 +1463,12 @@ void lyrics_renderer_media_push(const QString &filePath, int fadeMs)
         applyBgPath(inst, filePath, fadeMs, true, false);
 }
 
+bool lyrics_renderer_media_background_active()
+{
+    QMutexLocker lk(&s_mu);
+    return !s_mediaPath.isEmpty() && !s_mvMode;
+}
+
 void lyrics_renderer_media_clear(int fadeMs)
 {
     QMutexLocker lk(&s_mu);
@@ -1832,7 +1864,7 @@ void lyrics_renderer_paragraph_clear()
     }
 }
 
-void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor)
+void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outlineColor, bool repush)
 {
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
@@ -1841,11 +1873,60 @@ void lyrics_renderer_set_paragraph_text_color(uint32_t fontColor, uint32_t outli
                          (long long)(fontColor   & 0x00FFFFFF));
         obs_data_set_int(s,"paragraph_text_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        if(s_scriptureMode && s_paragraphMode)
+        if(repush && s_scriptureMode && s_paragraphMode)
             updateScriptureChildren(inst,s,
                 s_scripTitle, applySuperscript(s_scripText), true);
         obs_data_release(s);
     }
+}
+
+void lyrics_renderer_set_paragraph_layout(const QByteArray &overrideJson)
+{
+    QMutexLocker lk(&s_mu);
+    if (overrideJson == s_paragraphLayoutJson) return;   // unchanged: nothing to re-render
+    s_paragraphLayoutJson = overrideJson;
+    if (s_scriptureMode && s_paragraphMode) {
+        for (auto *inst : s_instances) {
+            obs_data_t *s = obs_source_get_settings(inst->self);
+            updateScriptureChildren(inst, s,
+                s_scripTitle, applySuperscript(s_scripText), true);
+            obs_data_release(s);
+        }
+    }
+}
+
+QByteArray lyrics_renderer_paragraph_layout_snapshot()
+{
+    QMutexLocker lk(&s_mu);
+    if (s_instances.isEmpty()) return QByteArray();
+    obs_data_t *s = obs_source_get_settings(s_instances.first()->self);
+    if (!s) return QByteArray();
+    obs_data_t *o = obs_data_create();
+    for (int row = 0; row < 2; ++row) {
+        const std::string p = (row == 0) ? "paragraph_title_" : "paragraph_text_";
+        auto copyInt = [&](const char *n) {
+            const std::string k = p + n;
+            obs_data_set_int(o, k.c_str(), obs_data_get_int(s, k.c_str()));
+        };
+        auto copyBool = [&](const char *n) {
+            const std::string k = p + n;
+            obs_data_set_bool(o, k.c_str(), obs_data_get_bool(s, k.c_str()));
+        };
+        const std::string face = p + "font_face";
+        obs_data_set_string(o, face.c_str(), obs_data_get_string(s, face.c_str()));
+        copyInt("font_size");  copyBool("bold");   copyBool("italic");
+        copyInt("align");      copyInt("valign");  copyInt("opacity");
+        copyBool("outline");   copyInt("outline_size");
+        copyBool("bg");        copyInt("bg_color"); copyInt("bg_opacity");
+        if (row == 0) { copyInt("color"); copyInt("outline_color"); }  // body colours: colour presets
+    }
+    for (const char *k : { "paragraph_title_h", "paragraph_h_margin", "paragraph_text_y" })
+        obs_data_set_int(o, k, obs_data_get_int(s, k));
+    const char *js = obs_data_get_json(o);
+    QByteArray out = js ? QByteArray(js) : QByteArray();
+    obs_data_release(o);
+    obs_data_release(s);
+    return out;
 }
 
 void lyrics_renderer_set_alt_sentence_color(bool enabled,
@@ -1875,7 +1956,7 @@ obs_source_t *lyrics_renderer_get_source()
     return s_instances.isEmpty() ? nullptr : s_instances.first()->self;
 }
 
-void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor)
+void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor, bool repush)
 {
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
@@ -1884,7 +1965,7 @@ void lyrics_renderer_set_text_color(uint32_t fontColor, uint32_t outlineColor)
                          (long long)(fontColor   & 0x00FFFFFF));
         obs_data_set_int(s,"lyrics_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        updateTextChildren(inst,s,s_lyrics,s_section,s_title);
+        if(repush) updateTextChildren(inst,s,s_lyrics,s_section,s_title);
         obs_data_release(s);
     }
 }
@@ -1906,7 +1987,7 @@ void lyrics_renderer_set_scripture_text_color(uint32_t fontColor,
     }
 }
 
-void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor)
+void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor, bool repush)
 {
     QMutexLocker lk(&s_mu);
     for(auto *inst:s_instances){
@@ -1919,7 +2000,7 @@ void lyrics_renderer_set_chinese_color(uint32_t fontColor, uint32_t outlineColor
                          (long long)(fontColor   & 0x00FFFFFF));
         obs_data_set_int(s,"ch_english_outline_color",
                          (long long)(outlineColor & 0x00FFFFFF));
-        if(s_chineseMode)
+        if(repush && s_chineseMode)
             updateChineseChildren(inst,s,s_pinyin,s_lyrics,s_english);
         obs_data_release(s);
     }

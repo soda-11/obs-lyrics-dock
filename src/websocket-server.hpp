@@ -61,6 +61,9 @@ public:
     void broadcastPresentationActive(int type);
     // Broadcasts which content tab is active ("paragraph"|"scr"|"lyr"|"ppt") — used by LP remote
     void broadcastActiveMode(const QString &mode);
+    // What is on air right now (segment + slide card, by id).  Sent to managers and the Live
+    // Preview remote, and cached so a client that connects later gets it at once.
+    void broadcastOnAir(const QJsonObject &obj);
     // Broadcasts color preset colors + active index to all manager clients
     void broadcastColorPresets(const QJsonArray &presets, int activeIdx);
     // Broadcasts AudioBin file list to all manager clients
@@ -116,6 +119,7 @@ private:
     QStringList m_lastScriptureMediaList;
     QJsonArray  m_lastSongsJson;
     QJsonArray  m_lastServiceOrderJson;
+    QJsonObject m_lastOnAirJson;
     QString     m_pin;             // empty = no auth required
     QString     m_lastMvMode;      // "video" | "music" | ""
     QString     m_lastMvPath;

@@ -33,6 +33,11 @@ public:
 
     Song result()      const { return m_song; }
     bool savedAsNew()  const { return m_savedAsNew; }
+    // Segment mode: the dialog edits a segment's own copy of the song.  An extra
+    // "Apply to This Segment" button changes only the segment; "Save to Library" and
+    // "Save as New Song" additionally write to the song library.
+    void setSegmentMode(bool on);
+    bool appliedToSegmentOnly() const { return m_appliedOnly; }
 
 private slots:
     void onSectionSelected(int row);
@@ -47,6 +52,7 @@ private slots:
     void onQuickPasteClicked();
     void onSaveToLibrary();
     void onSaveAsNew();
+    void onApplyToSegment();
 
 private:
     void buildUi(int initialSectionIndex);
@@ -59,6 +65,10 @@ private:
     Song  m_song;
     int   m_currentSection = -1;
     bool  m_savedAsNew     = false;
+    bool  m_appliedOnly    = false;
+    bool  m_segmentMode    = false;
+    QPushButton *m_applyBtn   = nullptr;
+    QPushButton *m_saveLibBtn = nullptr;
 
     QLineEdit          *m_titleEdit, *m_artistEdit;
     SectionListWidget  *m_sectionList;

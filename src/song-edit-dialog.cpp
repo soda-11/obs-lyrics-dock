@@ -379,8 +379,14 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     auto *saveLibBtn = new QPushButton("Save to Library");
     saveLibBtn->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
     saveLibBtn->setDefault(true);
+    m_saveLibBtn = saveLibBtn;
+    m_applyBtn = new QPushButton("Apply to This Segment");
+    m_applyBtn->setIcon(style()->standardIcon(QStyle::SP_DialogApplyButton));
+    m_applyBtn->setToolTip("Change only this segment. The song library is not touched.");
+    m_applyBtn->hide();
     btnBox->addWidget(cancelBtn);
     btnBox->addStretch();
+    btnBox->addWidget(m_applyBtn);
     btnBox->addWidget(saveNewBtn);
     btnBox->addWidget(saveLibBtn);
 
@@ -414,6 +420,7 @@ void SongEditDialog::buildUi(int initialSectionIndex)
     connect(cancelBtn,  &QPushButton::clicked, this, &QDialog::reject);
     connect(saveNewBtn, &QPushButton::clicked, this, &SongEditDialog::onSaveAsNew);
     connect(saveLibBtn, &QPushButton::clicked, this, &SongEditDialog::onSaveToLibrary);
+    connect(m_applyBtn, &QPushButton::clicked, this, &SongEditDialog::onApplyToSegment);
 
     // Switch to sections tab if initial section given
     if (initialSectionIndex >= 0)
@@ -760,6 +767,27 @@ void SongEditDialog::onQuickPasteClicked()
             .arg(m_song.sections.size()));
 }
 
+void SongEditDialog::setSegmentMode(bool on)
+{
+    m_segmentMode = on;
+    if (m_applyBtn)   { m_applyBtn->setVisible(on); m_applyBtn->setDefault(on); }
+    if (m_saveLibBtn) m_saveLibBtn->setDefault(!on);
+}
+
+void SongEditDialog::onApplyToSegment()
+{
+    saveCurrentSection();
+    m_song.title  = m_titleEdit->text().trimmed();
+    m_song.artist = m_artistEdit->text().trimmed();
+    if (m_song.title.isEmpty()) {
+        QMessageBox::warning(this, "Missing Title", "Please enter a song title.");
+        return;
+    }
+    m_savedAsNew  = false;
+    m_appliedOnly = true;
+    accept();
+}
+
 void SongEditDialog::onSaveToLibrary()
 {
     saveCurrentSection();
@@ -769,7 +797,14 @@ void SongEditDialog::onSaveToLibrary()
         QMessageBox::warning(this, "Missing Title", "Please enter a song title.");
         return;
     }
-    m_savedAsNew = false;
+    // From a segment this overwrites the library song with the segment's lyrics.
+    if (m_segmentMode &&
+        QMessageBox::question(this, "Replace library song?",
+            QString("Replace the lyrics of \"%1\" in the song library with this segment's lyrics?")
+                .arg(m_song.title)) != QMessageBox::Yes)
+        return;
+    m_savedAsNew  = false;
+    m_appliedOnly = false;
     accept();
 }
 
@@ -791,6 +826,7 @@ void SongEditDialog::onSaveAsNew()
     if (!checkDuplicateTitle(newTitle.trimmed())) return;
     m_song.id    = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_song.title = newTitle.trimmed();
-    m_savedAsNew = true;
+    m_savedAsNew  = true;
+    m_appliedOnly = false;
     accept();
 }

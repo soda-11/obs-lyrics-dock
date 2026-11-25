@@ -495,6 +495,10 @@ void WebSocketServer::handleWsFrame(WsClient *client,
                 sendJson(client, soMsg);
             }
 
+            // What is on air right now (manager + LP)
+            if ((role == "manager" || role == "lp") && !m_lastOnAirJson.isEmpty())
+                sendJson(client, m_lastOnAirJson);
+
             // Manager-only: media lists (per tab) and scenes
             if (role == "manager") {
                 auto sendMediaList = [&](const QString &tab, const QStringList &list) {
@@ -644,9 +648,9 @@ void WebSocketServer::handleWsFrame(WsClient *client,
             int presType = msg["presType"].toInt(-1);
             QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->presentationShowFromRemote(presType); }, Qt::QueuedConnection);
         } else if (type == "activateSlide") {
-            int serviceIdx = msg["serviceIdx"].toInt(-1);
+            int segIdx = msg["serviceIdx"].toInt(-1);
             int slideIdx   = msg["slideIdx"].toInt(0);
-            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->activateSlideFromRemote(serviceIdx, slideIdx); }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(qApp, [=](){ if(dock) dock->activateSlideFromRemote(segIdx, slideIdx); }, Qt::QueuedConnection);
         } else if (type == "getSongs") {
             // LP requests service order on connect
             if (!m_lastSongsJson.isEmpty()) {
@@ -701,11 +705,11 @@ void WebSocketServer::handleCommand(WsClient *client,
     }
 
     if (type == "activateSlide") {
-        int serviceIdx = msg["serviceIdx"].toInt(-1);
+        int segIdx = msg["serviceIdx"].toInt(-1);
         int slideIdx   = msg["slideIdx"].toInt(-1);
         LyricsDock *dock = m_dock;
         QMetaObject::invokeMethod(qApp, [=]() {
-            if (dock) dock->activateSlideFromRemote(serviceIdx, slideIdx);
+            if (dock) dock->activateSlideFromRemote(segIdx, slideIdx);
         }, Qt::QueuedConnection);
         return;
     }
@@ -1215,7 +1219,22 @@ void WebSocketServer::broadcastServiceOrder(const QJsonArray &order)
     QJsonObject obj;
     obj["type"]  = "serviceOrder";
     obj["items"] = order;
-    broadcastJson(obj, true); // managers only
+    // Managers AND the Live Preview remote: the queue it shows must always be current.
+    for (auto *c : m_clients) {
+        if (!c->upgraded || c->role.isEmpty()) continue;
+        if (c->role != "manager" && c->role != "lp") continue;
+        sendJson(c, obj);
+    }
+}
+
+void WebSocketServer::broadcastOnAir(const QJsonObject &obj)
+{
+    m_lastOnAirJson = obj;
+    for (auto *c : m_clients) {
+        if (!c->upgraded || c->role.isEmpty()) continue;
+        if (c->role != "manager" && c->role != "lp") continue;
+        sendJson(c, obj);
+    }
 }
 
 void WebSocketServer::broadcastMediaList(const QString &tab, const QStringList &paths)
